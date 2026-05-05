@@ -1065,7 +1065,7 @@ Next: /sprint plan to add work, /sprint status for the dashboard.
 
 ## Upgrade Command
 
-**Purpose**: Pull the latest version of the sprint skill from its git origin. The skill itself is a git checkout at `<SKILL DIR>`; this command runs `git fetch` + `git pull --ff-only` against it. Optionally switches to a specific branch for testing pre-merge changes.
+**Purpose**: Pull the latest version of the **skills bundle** from its git origin. The sprint skill ships as part of a multi-skill bundle (`skills/<name>/...` under one git checkout); this command runs `git fetch` + `git pull --ff-only` against the bundle root, so updates land for every skill installed from the bundle — not just sprint. Optionally switches to a specific branch for testing pre-merge changes.
 
 ### Invocation forms
 
@@ -1184,30 +1184,49 @@ AFTER_COMMIT = git -C <SKILL DIR> rev-parse HEAD
 ### Step 10: Report
 
 ```
+BUNDLE_ROOT    = git -C <SKILL DIR> rev-parse --show-toplevel
 CHANGED_FILES  = git -C <SKILL DIR> diff --name-only <BEFORE_COMMIT> <AFTER_COMMIT>
 RECENT_COMMITS = git -C <SKILL DIR> log --oneline <BEFORE_COMMIT>..<AFTER_COMMIT>
 ```
 
+Group `CHANGED_FILES` by skill so the user sees which installed skills moved (not just sprint):
+
+- For each path matching `skills/<name>/...`, bucket it under `<name>`. Collect `<name>`s into `SKILLS_CHANGED` (deduplicated, sorted).
+- Paths outside any `skills/<name>/` directory (e.g., top-level `README.md`, `.dev/`, `template/`) go into a single `(other)` bucket.
+
+If `CHANGED_FILES` is empty, both groupings are empty (a same-tree fast-forward); the report still shows the commit range and oneline log.
+
 Display:
 
 ```
-Upgraded sprint skill on '<TARGET_BRANCH>':
+Upgraded skills bundle on '<TARGET_BRANCH>':
   <BEFORE_COMMIT[0:7]> → <AFTER_COMMIT[0:7]>  (<BEHIND> new commits)
+  Bundle:  <BUNDLE_ROOT>
+  Skills with changes: <comma-joined SKILLS_CHANGED, or "(none)">
 
 Recent changes:
   <oneline list>
 
-Files updated:
-  <list>
+Files updated (by skill):
+  skills/<name>/
+    <file>
+    <file>
+  (other)
+    <file>
+
+[If SKILLS_CHANGED does not include "sprint" but is non-empty:]
+Note: this update did not change the sprint skill itself, but other skills in the bundle were updated.
 
 [If TARGET_BRANCH != DEFAULT_BRANCH:]
 Currently tracking non-default branch — run `/sprint upgrade reset` to return to `<DEFAULT_BRANCH>`.
 
-Changes take effect on next /sprint invocation
+Changes take effect on next invocation of any updated skill
 (the currently-running command is still the previous version).
 ```
 
-For MODE `dry-run`, replace "Upgraded" with "Would upgrade" and skip the "Files updated" section (just show the oneline log).
+Render only the buckets that have entries (don't print empty `skills/<name>/` headings).
+
+For MODE `dry-run`, replace "Upgraded" with "Would upgrade" and skip the "Files updated (by skill)" section (just show the commit range, skills-with-changes summary, and oneline log).
 
 ---
 
@@ -1240,8 +1259,9 @@ Print verbatim:
                                   Idempotent — safe to re-run.
 
   upgrade [<branch> | reset | check]
-                                  Pull the latest skill from origin.
-                                    (none)   pull whatever branch the skill is on
+                                  Pull the latest skills bundle from origin
+                                  (updates all skills in the bundle, not just sprint).
+                                    (none)   pull whatever branch the bundle is on
                                     <name>   switch to a branch and pull (sticky until reset)
                                     reset    return to default branch and pull
                                     check    dry-run — show what would change
