@@ -1,193 +1,76 @@
-# claude-sprint
+# leverj/agent-skills
 
-> **Repo layout in transition.** The skill source has moved to `skills/sprint/`
-> as part of a multi-skill bundle restructure (epic [#17](https://github.com/leverj/claude-sprint/issues/17)).
-> Install instructions and the full README rewrite are tracked in
-> [#15](https://github.com/leverj/claude-sprint/issues/15) and
-> [#16](https://github.com/leverj/claude-sprint/issues/16). Paths below may still
-> reference the legacy top-level layout until those land.
+A bundle of [Skills](https://docs.anthropic.com/en/docs/build-with-claude/agent-skills) for AI coding tools — drop-in workflows that any agent (Claude Code, Codex CLI, Gemini CLI, Cursor, OpenCode, GitHub Copilot CLI) can read.
 
-A scrum-aligned development workflow on top of **GitHub Projects v2**, runnable across multiple AI coding tools. Requirements live as structured GitHub Issues; sprint state (Status, Priority, Size, Iteration) lives on a Project board configured per GitHub's "Team Planning" template. Architectural decisions are recorded as ADRs in the repo. Any developer can pick up where someone left off.
+Each skill lives under `skills/<name>/` and ships its own `SKILL.md`, install docs, templates, and assets. The Claude Code plugin marketplace at [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) exposes them as installable plugins.
 
-## Repo Layout
+## Skills in this bundle
+
+| Skill | What it does | Docs |
+| --- | --- | --- |
+| **sprint** | Scrum/kanban-aware development workflow on top of GitHub Projects v2. Issues are requirements; Project fields are state; ADRs in `.dev/decisions/`. | [SKILL.md](skills/sprint/SKILL.md) · [README](skills/sprint/README.md) |
+
+## Install
+
+### Claude Code (plugin marketplace — recommended)
+
+Install any single skill from the bundle:
+
+```
+/plugin marketplace add leverj/agent-skills
+/plugin install <skill>@leverj-agent-skills
+```
+
+Example: `/plugin install sprint@leverj-agent-skills`.
+
+### Other tools (manual)
+
+Skills are filesystem artifacts. Clone the bundle once, then point each tool at the per-skill discovery file.
+
+```bash
+git clone https://github.com/leverj/agent-skills ~/agent-skills
+```
+
+Per-skill, per-tool install instructions (Codex CLI, Gemini CLI, Cursor, OpenCode, Copilot CLI) live under `skills/<skill>/docs/install/<tool>.md` — for example, [skills/sprint/docs/install/](skills/sprint/docs/install/).
+
+## Adding a new skill
+
+1. **Copy the scaffold** into a new skill directory:
+
+   ```bash
+   cp -r template/ skills/<new-skill>/
+   ```
+
+2. **Fill in the frontmatter** in `skills/<new-skill>/SKILL.md` — set `name` and `description`, then write the skill body. Reference assets via `<SKILL DIR>/<subdir>/<file>` so paths resolve regardless of where the skill is installed.
+
+3. **(Optional) Add per-tool install docs** under `skills/<new-skill>/docs/install/<tool>.md` if the skill needs tool-specific setup.
+
+4. **Register the skill in [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json)** by adding an entry to the `plugins` array:
+
+   ```json
+   {
+     "name": "<new-skill>",
+     "description": "<one-liner — what the skill does and when to use it>",
+     "source": "./",
+     "strict": false,
+     "skills": ["./skills/<new-skill>"]
+   }
+   ```
+
+5. **Add a row** to the **Skills in this bundle** table above with a one-line description and links to the skill's `SKILL.md` and `README.md` (if present).
+
+## Repo layout
 
 ```
 .
 ├── skills/
-│   └── sprint/        # the sprint skill (SKILL.md, AGENTS.md, GEMINI.md, docs/, setup/, templates/)
-├── template/          # minimal SKILL.md scaffold for new skills
-├── .dev/              # this repo's own sprint state (decisions, sprint-config.json)
+│   └── <skill>/         # SKILL.md, AGENTS.md, GEMINI.md, docs/, setup/, templates/, …
+├── template/            # Minimal SKILL.md scaffold for new skills
+├── .claude-plugin/
+│   └── marketplace.json # Bundle manifest for the Claude Code plugin marketplace
+├── .dev/                # This repo's own sprint state (decisions, sprint-config.json)
 ├── README.md
 └── LICENSE
-```
-
-## Prerequisites
-
-- A supported AI coding tool (see below)
-- [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated (`gh auth login`)
-- A git repo with a GitHub remote
-
-## Supported tools
-
-The canonical workflow lives in `SKILL.md`. `AGENTS.md` is a git symlink to it (mode `120000`), and `GEMINI.md` imports it via `@./SKILL.md` — so every tool reads the same source with no manual sync.
-
-| Tool | Discovery file | Install doc |
-| --- | --- | --- |
-| Claude Code | `~/.claude/skills/sprint/SKILL.md` | [docs/install/claude-code.md](docs/install/claude-code.md) |
-| Codex CLI | `AGENTS.md` (project root) | [docs/install/codex.md](docs/install/codex.md) |
-| Gemini CLI | `GEMINI.md` (project root) | [docs/install/gemini-cli.md](docs/install/gemini-cli.md) |
-| Cursor | `AGENTS.md` or `.cursor/rules/*.mdc` | [docs/install/cursor.md](docs/install/cursor.md) |
-| OpenCode | `AGENTS.md` (project root) | [docs/install/opencode.md](docs/install/opencode.md) |
-| GitHub Copilot CLI | `AGENTS.md` (project root) | [docs/install/copilot-cli.md](docs/install/copilot-cli.md) |
-
-## Quick install
-
-Claude Code (plugin marketplace — recommended):
-
-```
-/plugin marketplace add leverj/agent-skills
-/plugin install sprint@leverj-agent-skills
-```
-
-Claude Code (manual clone):
-
-```bash
-git clone https://github.com/leverj/agent-skills ~/.claude/skills/sprint
-```
-
-Other tools (clone once, link from each project):
-
-```bash
-git clone https://github.com/leverj/claude-sprint ~/sprint-workflow
-cd /path/to/your/project
-ln -s ~/sprint-workflow/AGENTS.md AGENTS.md   # or GEMINI.md, .cursor/rules/sprint.mdc, etc.
-```
-
-On Windows, enable git symlinks (`git config --global core.symlinks true`, run as admin) or `cp` the file and re-copy on update.
-
-## Updating
-
-`/sprint upgrade` pulls the **entire skills bundle** from its git origin — every skill installed from this repo gets updated, not just sprint. The report groups changed files by `skills/<name>/` and lists which skills moved.
-
-From inside any project that uses the skill:
-
-```
-/sprint upgrade                          # pull latest on current branch
-/sprint upgrade feat/some-branch         # switch to a branch (e.g., to test a PR)
-/sprint upgrade reset                    # return to default branch (master/main)
-/sprint upgrade check                    # dry-run; show what would change
-```
-
-Or do it manually:
-
-```bash
-cd ~/.claude/skills/sprint && git pull   # or ~/sprint-workflow
-```
-
-## Quick Start
-
-```
-/sprint setup          # Discover/create the Project, configure fields, link this repo
-/sprint plan           # Create structured requirements as GitHub Issues + Project items
-/sprint pick           # Claim an item from the board and implement it
-/sprint status         # Dashboard of the current iteration
-```
-
-After `/sprint setup`, open the Project's **Workflows** settings page (link is printed at the end of setup) and enable: *Auto-add to project*, *Item closed → Done*, *Pull request opened → In Review*, *Pull request merged → Done*. These are UI-only toggles GitHub does not expose via API.
-
-## Commands
-
-| Command | Purpose |
-|---------|---------|
-| `/sprint plan` | Discuss and create one or more structured GitHub Issues with acceptance criteria, phases, and risks. Adds them to the Project with Status / Priority / Size set, optionally to an iteration. |
-| `/sprint pick [N]` | List available items from the board, claim one, create a branch, implement phase by phase, create a PR. Status: Ready → In Progress → In Review. |
-| `/sprint decide ["title"]` | Record an architectural decision in `.dev/decisions/`, cross-link to GitHub Issues. |
-| `/sprint status [all]` | Dashboard read from the Project board. Shows current iteration prominently. `status all` includes other iterations and unscheduled items. |
-| `/sprint refine [N]` | Take a Backlog item and add structured acceptance criteria, phases, risks, Priority, and Size — moves it to Status: Ready. |
-| `/sprint setup` | Discover or create a GitHub Project, configure Team Planning fields, link this repo, persist `.dev/sprint-config.json`. |
-| `/sprint upgrade [branch\|reset\|check]` | Pull the latest skills bundle from origin (updates all skills in the bundle, not just sprint). Optional branch arg switches branches (sticky until reset). |
-| `/sprint help` | Show all commands and subcommands with short descriptions. |
-
-## How It Works
-
-### Requirements as GitHub Issues
-
-`/sprint plan` creates Issues with a structured format:
-
-- **User Story** — "As a [role], I want [capability] so that [benefit]"
-- **Acceptance Criteria** — WHEN/THEN/SHALL format, directly testable
-- **Implementation Phases** — ordered checkboxes, each independently verifiable
-- **Risk Assessment** — technical risks, dependencies, unknowns
-
-### Sprint state lives on the Project board
-
-State that scrum tools track — Status (Backlog / Ready / In Progress / In Review / Done), Priority (P0 / P1 / P2), Size (XS / S / M / L / XL), Iteration — are **GitHub Project fields**, not labels. The skill reads and writes those fields directly via `gh project`.
-
-The first `/sprint setup` either links this repo to an existing Project or creates a new one named after the repo. Choice is persisted in `.dev/sprint-config.json` (`project_number` only — names are renameable in the GitHub UI without breaking anything).
-
-The Iteration field is created **lazily** the first time someone names a sprint; until then, items live in an "infinite sprint" (no iteration assigned).
-
-### Concurrency via GitHub Assignment
-
-When a developer runs `/sprint pick`, the skill assigns the issue to them on GitHub before starting work and moves the Project Status to `In Progress`. Other developers see the item as taken. GitHub assignment is the lock — no file-based coordination needed.
-
-### Decisions as ADRs
-
-`/sprint decide` creates files in `.dev/decisions/` with context, rationale, alternatives considered, and consequences. These are version-controlled alongside the code they govern. GitHub Issues get a comment linking to the decision for cross-reference.
-
-### Phase-by-Phase Implementation
-
-`/sprint pick` doesn't implement everything at once. It works through the Implementation Phases defined on the issue:
-
-1. Implement the phase (with a [Dependency Safety Check](SKILL.md#dependency-safety-check) gate before any new dependency is added)
-2. Write/update tests
-3. Update the phase checkbox on GitHub
-4. Move to next phase
-
-After all phases are complete, the skill presents the changes for review. **Code is never committed, pushed, or turned into a PR without explicit developer approval.** The developer reviews the diff, adjusts the commit message if needed, and confirms before anything leaves the local machine.
-
-If a session ends mid-work, the next developer can see which phases are checked off.
-
-## Labels (small set)
-
-Labels are intentionally minimal — Status / Priority / Size live as Project fields, not labels.
-
-| Label | Meaning |
-|-------|---------|
-| `type:feature` | New functionality (drives `feat/` branch prefix) |
-| `type:bug` | Something broken (drives `bug/` branch prefix) |
-| `type:refactor` | Internal improvement (drives `refactor/` branch prefix) |
-
-`package:*` labels are created on-the-fly for monorepo projects (e.g., `package:ui`, `package:server`).
-
-## Decision Records
-
-Decisions are stored in `.dev/decisions/` with this naming convention:
-
-```
-.dev/decisions/D-001-use-supabase-for-auth.md
-.dev/decisions/D-002-monorepo-structure.md
-```
-
-Each file captures: Context, Decision, Rationale, Alternatives Considered, and Consequences.
-
-## Customization
-
-Fork this repo to customize:
-
-- **Labels**: Edit `setup/labels.json` to change names, colors, or add new labels
-- **Issue template**: Edit `templates/issue-body.md` to change the issue structure
-- **Decision template**: Edit `templates/decision-record.md` to change the ADR format
-- **Workflow**: Edit `SKILL.md` to modify command behavior
-
-## Uninstalling
-
-```bash
-# Global
-rm -rf ~/.claude/skills/sprint
-
-# Per-project
-rm -rf .claude/skills/sprint
 ```
 
 ## License
