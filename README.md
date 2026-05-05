@@ -42,10 +42,17 @@ The canonical workflow lives in `SKILL.md`. `AGENTS.md` is a git symlink to it (
 
 ## Quick install
 
-Claude Code (native skill):
+Claude Code (plugin marketplace — recommended):
+
+```
+/plugin marketplace add leverj/agent-skills
+/plugin install sprint@agent-skills
+```
+
+Claude Code (manual clone):
 
 ```bash
-git clone https://github.com/leverj/claude-sprint ~/.claude/skills/sprint
+git clone https://github.com/leverj/agent-skills ~/.claude/skills/sprint
 ```
 
 Other tools (clone once, link from each project):

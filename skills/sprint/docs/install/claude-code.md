@@ -1,13 +1,24 @@
 # Install — Claude Code
 
-Native skill — Claude Code loads `SKILL.md` from `~/.claude/skills/<name>/`.
+Native skill — Claude Code loads `SKILL.md` from installed plugins or `~/.claude/skills/<name>/`.
 
-## Install
+## Install (recommended) — plugin marketplace
+
+In Claude Code:
+
+```
+/plugin marketplace add leverj/agent-skills
+/plugin install sprint@agent-skills
+```
+
+`/sprint` commands become available immediately. Updates flow via `/plugin update`.
+
+## Install (manual) — git clone
 
 Global:
 
 ```bash
-git clone https://github.com/leverj/claude-sprint ~/.claude/skills/sprint
+git clone https://github.com/leverj/agent-skills ~/.claude/skills/sprint
 ```
 
 Per-project: clone into `.claude/skills/sprint` instead.
