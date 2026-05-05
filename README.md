@@ -46,7 +46,7 @@ Claude Code (plugin marketplace — recommended):
 
 ```
 /plugin marketplace add leverj/agent-skills
-/plugin install sprint@agent-skills
+/plugin install sprint@leverj-agent-skills
 ```
 
 Claude Code (manual clone):

@@ -8,7 +8,7 @@ In Claude Code:
 
 ```
 /plugin marketplace add leverj/agent-skills
-/plugin install sprint@agent-skills
+/plugin install sprint@leverj-agent-skills
 ```
 
 `/sprint` commands become available immediately. Updates flow via `/plugin update`.
