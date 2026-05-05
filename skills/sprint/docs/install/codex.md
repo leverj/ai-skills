@@ -7,7 +7,7 @@ Codex auto-discovers `AGENTS.md` in the project root. This repo ships `AGENTS.md
 ```bash
 git clone https://github.com/leverj/claude-sprint ~/sprint-workflow
 cd /path/to/your/project
-ln -s ~/sprint-workflow/AGENTS.md AGENTS.md
+ln -s ~/sprint-workflow/skills/sprint/AGENTS.md AGENTS.md
 ```
 
 If symlinks aren't supported, `cp` instead and re-copy on update.
@@ -35,4 +35,13 @@ Manual fallback:
 
 ```bash
 cd ~/sprint-workflow && git pull
+```
+
+## Migration (existing manual installs)
+
+If you symlinked `AGENTS.md` to `~/sprint-workflow/AGENTS.md` before the bundle restructure, the symlink breaks on next `git pull` (the skill source moved into `skills/sprint/`). Recreate it:
+
+```bash
+rm AGENTS.md
+ln -s ~/sprint-workflow/skills/sprint/AGENTS.md AGENTS.md
 ```

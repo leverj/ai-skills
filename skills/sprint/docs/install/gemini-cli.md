@@ -11,7 +11,7 @@ git clone https://github.com/leverj/claude-sprint ~/sprint-workflow
 In each project, create `GEMINI.md` containing:
 
 ```
-@~/sprint-workflow/SKILL.md
+@~/sprint-workflow/skills/sprint/SKILL.md
 ```
 
 ## Invocation
@@ -37,4 +37,12 @@ Manual fallback:
 
 ```bash
 cd ~/sprint-workflow && git pull
+```
+
+## Migration (existing manual installs)
+
+If your `GEMINI.md` imports `@~/sprint-workflow/SKILL.md` from a pre-restructure install, the import breaks on next `git pull` (the skill source moved into `skills/sprint/`). Update it to:
+
+```
+@~/sprint-workflow/skills/sprint/SKILL.md
 ```
