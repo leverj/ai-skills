@@ -1,0 +1,22 @@
+{
+  "name": "leverj-agent-skills",
+  "owner": {
+    "name": "leverj",
+    "email": "nirmal@leverj.io"
+  },
+  "metadata": {
+    "description": "Agent skills bundle for AI coding tools",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "sprint",
+      "description": "Scrum/kanban-aware development workflow on top of GitHub Projects v2. Issues are requirements; Project fields are state; ADRs in .dev/decisions/.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/sprint"
+      ]
+    }
+  ]
+}
