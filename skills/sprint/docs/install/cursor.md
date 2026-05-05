@@ -7,10 +7,10 @@ Cursor auto-discovers `AGENTS.md` in the project root (and nested dirs). It also
 ```bash
 git clone https://github.com/leverj/claude-sprint ~/sprint-workflow
 cd /path/to/your/project
-ln -s ~/sprint-workflow/AGENTS.md AGENTS.md
+ln -s ~/sprint-workflow/skills/sprint/AGENTS.md AGENTS.md
 ```
 
-Alternative: `mkdir -p .cursor/rules && ln -s ~/sprint-workflow/SKILL.md .cursor/rules/sprint.mdc`.
+Alternative: `mkdir -p .cursor/rules && ln -s ~/sprint-workflow/skills/sprint/SKILL.md .cursor/rules/sprint.mdc`.
 
 ## Invocation
 
@@ -36,4 +36,14 @@ Manual fallback:
 
 ```bash
 cd ~/sprint-workflow && git pull
+```
+
+## Migration (existing manual installs)
+
+If you symlinked `AGENTS.md` to `~/sprint-workflow/AGENTS.md` (or `.cursor/rules/sprint.mdc` to `~/sprint-workflow/SKILL.md`) before the bundle restructure, those symlinks break on next `git pull` (the skill source moved into `skills/sprint/`). Recreate them:
+
+```bash
+rm AGENTS.md && ln -s ~/sprint-workflow/skills/sprint/AGENTS.md AGENTS.md
+# or, for the rules variant:
+rm .cursor/rules/sprint.mdc && ln -s ~/sprint-workflow/skills/sprint/SKILL.md .cursor/rules/sprint.mdc
 ```

@@ -7,10 +7,10 @@ Copilot CLI treats `AGENTS.md` in the repo root as primary instructions (and add
 ```bash
 git clone https://github.com/leverj/claude-sprint ~/sprint-workflow
 cd /path/to/your/project
-ln -s ~/sprint-workflow/AGENTS.md AGENTS.md
+ln -s ~/sprint-workflow/skills/sprint/AGENTS.md AGENTS.md
 ```
 
-(If symlinks aren't available, copy: `cp ~/sprint-workflow/AGENTS.md AGENTS.md` and re-copy on update.)
+(If symlinks aren't available, copy: `cp ~/sprint-workflow/skills/sprint/AGENTS.md AGENTS.md` and re-copy on update.)
 
 ## Invocation
 
@@ -35,4 +35,13 @@ Manual fallback:
 
 ```bash
 cd ~/sprint-workflow && git pull
+```
+
+## Migration (existing manual installs)
+
+If you symlinked or copied `AGENTS.md` from `~/sprint-workflow/AGENTS.md` before the bundle restructure, that target is gone on next `git pull` (the skill source moved into `skills/sprint/`). Recreate it:
+
+```bash
+rm AGENTS.md
+ln -s ~/sprint-workflow/skills/sprint/AGENTS.md AGENTS.md
 ```

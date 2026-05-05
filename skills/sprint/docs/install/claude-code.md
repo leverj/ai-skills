@@ -15,13 +15,23 @@ In Claude Code:
 
 ## Install (manual) — git clone
 
-Global:
+The skill source lives in `skills/sprint/` inside the bundle repo. Clone the repo to a workspace path, then symlink (or copy) the skill into Claude Code's skills directory.
+
+Global, with a symlink (recommended — keeps `git pull` in one place):
 
 ```bash
-git clone https://github.com/leverj/agent-skills ~/.claude/skills/sprint
+git clone https://github.com/leverj/claude-sprint ~/sprint-workflow
+ln -s ~/sprint-workflow/skills/sprint ~/.claude/skills/sprint
 ```
 
-Per-project: clone into `.claude/skills/sprint` instead.
+If symlinks aren't available, copy and re-copy on update:
+
+```bash
+git clone https://github.com/leverj/claude-sprint ~/sprint-workflow
+cp -R ~/sprint-workflow/skills/sprint ~/.claude/skills/sprint
+```
+
+Per-project: replace `~/.claude/skills/sprint` with `.claude/skills/sprint` inside the project root.
 
 Optionally append `claude-md-snippet.md` to your project's `CLAUDE.md`.
 
@@ -44,8 +54,26 @@ Recommended (from inside any project that uses the skill):
 
 See [Upgrade Command](../../SKILL.md#upgrade-command) for branch switching (`/sprint upgrade <branch>`, `/sprint upgrade reset`, `/sprint upgrade check`).
 
-Manual fallback:
+Manual fallback (symlink install):
 
 ```bash
-cd ~/.claude/skills/sprint && git pull
+cd ~/sprint-workflow && git pull
+```
+
+If you copied instead of symlinked, re-copy after pulling:
+
+```bash
+cd ~/sprint-workflow && git pull
+rm -rf ~/.claude/skills/sprint
+cp -R ~/sprint-workflow/skills/sprint ~/.claude/skills/sprint
+```
+
+## Migration (existing manual installs)
+
+If you previously cloned the bundle directly into `~/.claude/skills/sprint` (pre-restructure), that checkout no longer has `SKILL.md` at its root after `git pull` — the skill source moved into `skills/sprint/`. Either switch to the marketplace install above, or re-do the manual install:
+
+```bash
+rm -rf ~/.claude/skills/sprint
+git clone https://github.com/leverj/claude-sprint ~/sprint-workflow
+ln -s ~/sprint-workflow/skills/sprint ~/.claude/skills/sprint
 ```
