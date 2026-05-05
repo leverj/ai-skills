@@ -1,6 +1,25 @@
 # claude-sprint
 
+> **Repo layout in transition.** The skill source has moved to `skills/sprint/`
+> as part of a multi-skill bundle restructure (epic [#17](https://github.com/leverj/claude-sprint/issues/17)).
+> Install instructions and the full README rewrite are tracked in
+> [#15](https://github.com/leverj/claude-sprint/issues/15) and
+> [#16](https://github.com/leverj/claude-sprint/issues/16). Paths below may still
+> reference the legacy top-level layout until those land.
+
 A scrum-aligned development workflow on top of **GitHub Projects v2**, runnable across multiple AI coding tools. Requirements live as structured GitHub Issues; sprint state (Status, Priority, Size, Iteration) lives on a Project board configured per GitHub's "Team Planning" template. Architectural decisions are recorded as ADRs in the repo. Any developer can pick up where someone left off.
+
+## Repo Layout
+
+```
+.
+├── skills/
+│   └── sprint/        # the sprint skill (SKILL.md, AGENTS.md, GEMINI.md, docs/, setup/, templates/)
+├── template/          # minimal SKILL.md scaffold for new skills
+├── .dev/              # this repo's own sprint state (decisions, sprint-config.json)
+├── README.md
+└── LICENSE
+```
 
 ## Prerequisites
 
