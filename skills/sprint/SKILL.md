@@ -37,7 +37,7 @@ How each tool resolves them:
 
 | Tool | `<USER REQUEST>` | `<SKILL DIR>` |
 | --- | --- | --- |
-| Claude Code | The text after `/sprint` in the slash-command invocation. Treat the whole tail (e.g., `pick 2`) as `<USER REQUEST>`. | The directory of the loaded skill (typically `~/.claude/skills/sprint/`). |
+| Claude Code | Slash-command invocation. Plugin install: `/leverj:sprint <args>`. Manual install: `/sprint <args>`. The text after the command (e.g., `pick 2`) is `<USER REQUEST>`. | The directory of the loaded skill (typically `~/.claude/skills/sprint/` for manual installs, or the plugin's cache directory under `~/.claude/plugins/`). |
 | Codex CLI | Inline in the prompt: `codex "run sprint: pick 2"`. The text after `run sprint:` is `<USER REQUEST>`. | The directory containing `AGENTS.md` (the symlink to `SKILL.md`) in the cloned repo. |
 | Gemini CLI | Inline in the prompt: `gemini "run sprint: pick 2"`. Text after `run sprint:` is `<USER REQUEST>`. | The directory containing `GEMINI.md` (which `@./SKILL.md`-imports this file). |
 | Cursor | Either invoke the rule by name in chat with the request appended, or place the request in the chat message. | The rules directory holding the symlink/copy. |

@@ -37,12 +37,21 @@ Optionally append `claude-md-snippet.md` to your project's `CLAUDE.md`.
 
 ## Invocation
 
+Plugin install (namespaced under the plugin name):
+
+```
+/leverj:sprint plan
+/leverj:sprint pick 2
+```
+
+Manual install (no namespace):
+
 ```
 /sprint plan
 /sprint pick 2
 ```
 
-Text after `/sprint` is `<USER REQUEST>`. `<SKILL DIR>` is the install path.
+In either form, the text after the command is `<USER REQUEST>`. `<SKILL DIR>` is the install path.
 
 ## Update
 

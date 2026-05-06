@@ -35,7 +35,8 @@ Then invoke as `/leverj:sprint <subcommand>` — e.g. `/leverj:sprint pick 42`.
 Claude Code (manual clone):
 
 ```bash
-git clone https://github.com/leverj/ai-skills ~/.claude/skills/sprint
+git clone https://github.com/leverj/ai-skills ~/sprint-workflow
+ln -s ~/sprint-workflow/skills/sprint ~/.claude/skills/sprint
 ```
 
 Other tools (clone once, link from each project):
@@ -64,10 +65,12 @@ From inside any project that uses the skill:
 Or do it manually:
 
 ```bash
-cd ~/.claude/skills/sprint && git pull   # or ~/sprint-workflow
+cd ~/sprint-workflow && git pull   # the bundle clone; ~/.claude/skills/sprint symlinks into it
 ```
 
 ## Quick Start
+
+> Commands below use the canonical `/sprint <sub>` form. **In a Claude Code plugin install**, prefix with `/leverj:` — e.g. `/leverj:sprint setup`. Manual installs and other tools (Codex, Cursor, Gemini, OpenCode, Copilot CLI) use the unprefixed form.
 
 ```
 /sprint setup          # Discover/create the Project, configure fields, link this repo
