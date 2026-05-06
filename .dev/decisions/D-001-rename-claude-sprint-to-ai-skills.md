@@ -13,6 +13,8 @@ The repo currently named `leverj/claude-sprint` was created to hold a single ski
 
 Rename `leverj/claude-sprint` → `leverj/ai-skills`.
 
+> **Note**: `agent-skills` was the original proposed name. `ai-skills` was chosen at execution time as shorter and equally descriptive.
+
 ## Rationale
 
 - "ai" is the broadest accurate category — these are skills for AI coding tools (Claude Code, Codex, Gemini, Cursor, OpenCode, Copilot CLI), not specifically Claude.
@@ -50,7 +52,7 @@ Rename `leverj/claude-sprint` → `leverj/ai-skills`.
 - [x] Update top-level `README.md` install instructions to use `https://github.com/leverj/ai-skills`.
 - [x] Update `docs/install/*.md` clone commands.
 - [x] Update `marketplace.json` to use `leverj-ai-skills` as the marketplace `name`.
-- [ ] Add a release note advising existing local clones to run: `git remote set-url origin https://github.com/leverj/ai-skills.git`.
+- [x] Add a release note advising existing local clones to run: `git remote set-url origin https://github.com/leverj/ai-skills.git`.
 - [x] Update any references in `.claude-plugin/marketplace.json`, README, and install docs that hardcode the repo name.
 
 The rename itself is independent of the bundle restructure (#12) and can land before, during, or after — GitHub redirects make the order non-blocking.
