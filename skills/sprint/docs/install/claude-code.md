@@ -7,8 +7,8 @@ Native skill — Claude Code loads `SKILL.md` from installed plugins or `~/.clau
 In Claude Code:
 
 ```
-/plugin marketplace add leverj/agent-skills
-/plugin install sprint@leverj-agent-skills
+/plugin marketplace add leverj/ai-skills
+/plugin install sprint@leverj-ai-skills
 ```
 
 `/sprint` commands become available immediately. Updates flow via `/plugin update`.
@@ -20,14 +20,14 @@ The skill source lives in `skills/sprint/` inside the bundle repo. Clone the rep
 Global, with a symlink (recommended — keeps `git pull` in one place):
 
 ```bash
-git clone https://github.com/leverj/claude-sprint ~/sprint-workflow
+git clone https://github.com/leverj/ai-skills ~/sprint-workflow
 ln -s ~/sprint-workflow/skills/sprint ~/.claude/skills/sprint
 ```
 
 If symlinks aren't available, copy and re-copy on update:
 
 ```bash
-git clone https://github.com/leverj/claude-sprint ~/sprint-workflow
+git clone https://github.com/leverj/ai-skills ~/sprint-workflow
 cp -R ~/sprint-workflow/skills/sprint ~/.claude/skills/sprint
 ```
 
@@ -74,6 +74,6 @@ If you previously cloned the bundle directly into `~/.claude/skills/sprint` (pre
 
 ```bash
 rm -rf ~/.claude/skills/sprint
-git clone https://github.com/leverj/claude-sprint ~/sprint-workflow
+git clone https://github.com/leverj/ai-skills ~/sprint-workflow
 ln -s ~/sprint-workflow/skills/sprint ~/.claude/skills/sprint
 ```

@@ -5,7 +5,7 @@ Gemini CLI loads `GEMINI.md` from the project root and supports `@`-imports.
 ## Install
 
 ```bash
-git clone https://github.com/leverj/claude-sprint ~/sprint-workflow
+git clone https://github.com/leverj/ai-skills ~/sprint-workflow
 ```
 
 In each project, create `GEMINI.md` containing:

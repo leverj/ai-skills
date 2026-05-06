@@ -5,7 +5,7 @@ Codex auto-discovers `AGENTS.md` in the project root. This repo ships `AGENTS.md
 ## Install
 
 ```bash
-git clone https://github.com/leverj/claude-sprint ~/sprint-workflow
+git clone https://github.com/leverj/ai-skills ~/sprint-workflow
 cd /path/to/your/project
 ln -s ~/sprint-workflow/skills/sprint/AGENTS.md AGENTS.md
 ```

@@ -1,4 +1,4 @@
-# D-001: Rename claude-sprint to agent-skills
+# D-001: Rename claude-sprint to ai-skills
 
 **Date**: 2026-04-28
 **Author**: Nirmal Gupta
@@ -11,17 +11,18 @@ The repo currently named `leverj/claude-sprint` was created to hold a single ski
 
 ## Decision
 
-Rename `leverj/claude-sprint` → `leverj/agent-skills`.
+Rename `leverj/claude-sprint` → `leverj/ai-skills`.
 
 ## Rationale
 
-- "agent" is the broader category — these are skills for AI coding agents (Claude Code, Codex, Gemini, Cursor, OpenCode, Copilot CLI), not specifically Claude.
+- "ai" is the broadest accurate category — these are skills for AI coding tools (Claude Code, Codex, Gemini, Cursor, OpenCode, Copilot CLI), not specifically Claude.
 - "skills" matches the directory name (`skills/<name>/`) and the anthropics naming convention.
 - Short and memorable; survives future expansion without semantic drift.
 
 ## Alternatives Considered
 
 - **Keep `claude-sprint`**: rejected — the name lies once non-sprint skills join the bundle.
+- **`agent-skills`**: considered — accurate ("skills for AI agents") and aligned with Anthropic's "agent skills" terminology, but `ai-skills` is shorter and reads more naturally to a wider audience.
 - **`leverj-skills`**: rejected — the `leverj-` prefix is redundant with the org context (already at `leverj/`).
 - **`claude-agent-skills`**: rejected — `claude-` prefix is misleading (skills target multiple agents, not just Claude); also redundant if Anthropic's anthropics/skills ever federates a community marketplace.
 - **`agents`** (singular dir name match): rejected — singular doesn't match the `skills/` directory scheme.
@@ -45,11 +46,11 @@ Rename `leverj/claude-sprint` → `leverj/agent-skills`.
 
 ## Action items
 
-- [ ] Rename repo via GitHub Settings → Repository name → `agent-skills`.
-- [ ] Update top-level `README.md` install instructions to use `https://github.com/leverj/agent-skills`.
-- [ ] Update `docs/install/*.md` clone commands.
-- [ ] Update `marketplace.json` (when added in #13) to use `agent-skills` as the marketplace `name`.
-- [ ] Add a release note advising existing local clones to run: `git remote set-url origin https://github.com/leverj/agent-skills.git`.
-- [ ] Update any references in `.claude-plugin/marketplace.json`, README, and install docs that hardcode the repo name.
+- [x] Rename repo via GitHub Settings → Repository name → `ai-skills`.
+- [x] Update top-level `README.md` install instructions to use `https://github.com/leverj/ai-skills`.
+- [x] Update `docs/install/*.md` clone commands.
+- [x] Update `marketplace.json` to use `leverj-ai-skills` as the marketplace `name`.
+- [ ] Add a release note advising existing local clones to run: `git remote set-url origin https://github.com/leverj/ai-skills.git`.
+- [x] Update any references in `.claude-plugin/marketplace.json`, README, and install docs that hardcode the repo name.
 
 The rename itself is independent of the bundle restructure (#12) and can land before, during, or after — GitHub redirects make the order non-blocking.

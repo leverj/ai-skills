@@ -1,4 +1,4 @@
-# leverj/agent-skills
+# leverj/ai-skills
 
 A bundle of [Skills](https://docs.anthropic.com/en/docs/build-with-claude/agent-skills) for AI coding tools — drop-in workflows that any agent (Claude Code, Codex CLI, Gemini CLI, Cursor, OpenCode, GitHub Copilot CLI) can read.
 
@@ -17,18 +17,18 @@ Each skill lives under `skills/<name>/` and ships its own `SKILL.md`, install do
 Install any single skill from the bundle:
 
 ```
-/plugin marketplace add leverj/agent-skills
-/plugin install <skill>@leverj-agent-skills
+/plugin marketplace add leverj/ai-skills
+/plugin install <skill>@leverj-ai-skills
 ```
 
-Example: `/plugin install sprint@leverj-agent-skills`.
+Example: `/plugin install sprint@leverj-ai-skills`.
 
 ### Other tools (manual)
 
 Skills are filesystem artifacts. Clone the bundle once, then point each tool at the per-skill discovery file.
 
 ```bash
-git clone https://github.com/leverj/agent-skills ~/agent-skills
+git clone https://github.com/leverj/ai-skills ~/ai-skills
 ```
 
 Per-skill, per-tool install instructions (Codex CLI, Gemini CLI, Cursor, OpenCode, Copilot CLI) live under `skills/<skill>/docs/install/<tool>.md` — for example, [skills/sprint/docs/install/](skills/sprint/docs/install/).
