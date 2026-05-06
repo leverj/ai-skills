@@ -130,7 +130,9 @@ When a developer runs `/sprint pick`, the skill assigns the issue to them on Git
 3. Update the phase checkbox on GitHub
 4. Move to next phase
 
-After all phases are complete, the skill presents the changes for review. **Code is never committed, pushed, or turned into a PR without explicit developer approval.** The developer reviews the diff, adjusts the commit message if needed, and confirms before anything leaves the local machine.
+After all phases are complete, the skill presents the changes for review. For stories sized **XS / S / M**, code is never committed, pushed, or turned into a PR without explicit developer approval — the developer reviews the diff and confirms before anything leaves the local machine.
+
+For stories sized **L / XL**, the skill runs autonomously: it commits and pushes after each phase (so the remote branch reflects current progress and the developer can interrupt with coherent state), runs the pre-PR review battery once on the cumulative diff at PR-open time, and opens the PR without asking. The L/XL sizing on the issue is the developer's authorization for autonomous execution; manual end-to-end verification is deferred to the developer on the open PR.
 
 If a session ends mid-work, the next developer can see which phases are checked off.
 

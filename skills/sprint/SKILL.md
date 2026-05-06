@@ -135,13 +135,61 @@ If `ITERATION_FIELD_ID` is `None`, set `CURRENT_ITERATION_ID = None`.
    - **Users / scope**: who's affected? what's in / out?
    - **Behavior**: happy path, edge cases, errors, persistence, UI behavior.
    - **Type**: feature / bug / refactor.
-   - **Priority**: P0 (blocking) / P1 (important) / P2 (nice-to-have).
-   - **Size**: XS / S / M / L / XL.
    - **Risks & dependencies**: technical unknowns, blockers, related work.
    - **Phasing**: how to split implementation into 2–4 independently testable phases.
+
+   **Priority and Size are decided by the assistant, not asked.** Infer Priority (P0 blocking / P1 important / P2 nice-to-have) from scope and impact. Infer Size (XS / S / M / L / XL) from the implementation phases and risk surface. State the chosen values in the proposed issue summary so the developer can override them.
 5. **Reflect periodically.** After 3–5 answered questions, summarize the picture in 2–3 lines and ask "does that match your intent?" before continuing. This catches drift early instead of at the end.
 6. **Escape hatch.** If the developer pastes a full spec, says "just create it", or otherwise signals they don't want to be interviewed, skip the protocol: propose the structured issue directly for confirmation.
 7. **Stop when the dimensions are covered well enough to write a good issue.** Don't grill for completeness's sake — there's almost always more to ask, and the goal is a good issue, not a perfect one.
+
+---
+
+## Architectural Shift Auto-ADR
+
+**Trigger**: when an issue under discussion involves an architectural shift, automatically run the decide flow and create an ADR. **Do not ask** — create the ADR, cross-link it to the issue, and mention the ADR in the summary returned to the developer.
+
+**What counts as an architectural shift**:
+
+- Removing a subsystem.
+- Swapping a core pattern (sync ↔ async, REST ↔ GraphQL, monolith ↔ services, polling ↔ event-driven, etc.).
+- Consolidating parallel systems.
+- Changing the identity / authentication / authorization model.
+- Changing data ownership (which service or layer owns which records).
+- Changing deployment topology (where things run, how they're packaged, single-region ↔ multi-region, etc.).
+
+**What does NOT count**:
+
+- Routine features that fit existing patterns.
+- Bug fixes.
+- Refactors that don't change architecture (renames, file splits, internal reorganizations).
+- Configuration tweaks.
+
+When unsure, err toward creating the ADR — false positives are cheap (one extra file in `.dev/decisions/`); false negatives lose the rationale forever.
+
+**Procedure** (per qualifying issue):
+
+1. Determine the next decision number — see [Decide Command, Step 1](#step-1-find-next-decision-number).
+2. Read the template from `<SKILL DIR>/templates/decision-record.md` and fill it in:
+   - **Title**: derived from the issue (e.g., issue "Move payments to async queue" → ADR "Switch payments from sync to async").
+   - **Context**: the problem and the existing system state being changed.
+   - **Decision**: the architectural change being made.
+   - **Rationale**: the *why*, captured from the discussion and the issue body.
+   - **Alternatives Considered**: the options that came up.
+   - **Consequences**: positive and negative implications.
+3. Write to `.dev/decisions/D-<NNN>-<slug>.md`.
+4. Cross-link to the GitHub Issue:
+
+   ```
+   gh issue comment <ISSUE_NUMBER> --body "Decision recorded: [D-<NNN>: <title>](.dev/decisions/D-<NNN>-<slug>.md)
+
+   **Decision**: <one-line summary>
+   **Rationale**: <one-line summary>"
+   ```
+
+5. Mention the ADR in the summary returned to the developer (e.g., `ADR D-007 created at .dev/decisions/D-007-<slug>.md, linked to #41`).
+
+This auto-ADR fires from `plan` (Step 6.5) and `refine` (Step 7.5) — see those sections for the exact hook points.
 
 ---
 
@@ -237,7 +285,7 @@ For each issue:
 
 For each issue, decide initial Status:
 
-- If acceptance criteria, phases, risks, **Priority, and Size** were all discussed and set → `Status: Ready`.
+- If acceptance criteria, phases, and risks are filled in → `Status: Ready`. (Priority and Size are auto-decided per [Grill Me Protocol](#grill-me-protocol) and stated in the proposed summary for the developer to override.)
 - If any of those are missing or the developer said "I haven't fully thought it through" → `Status: Backlog`. The issue can be picked up later via `/sprint refine`.
 
 ### Step 6: Create each issue and add to Project
@@ -313,9 +361,13 @@ gh api graphql -f query='
 
 If the mutation fails (the sub-issues feature is not enabled on this repo, or the gh/GraphQL surface differs), surface the error clearly and fall back to recording `Parent: #<PARENT_NUMBER>` in the child's issue body Notes section. Do not silently skip.
 
+### Step 6.5: Architectural Shift Auto-ADR
+
+For each issue created in Step 6, evaluate whether it involves an architectural shift per [Architectural Shift Auto-ADR](#architectural-shift-auto-adr). If yes, run that procedure for the issue and capture the resulting `D-<NNN>` for the Step 7 summary.
+
 ### Step 7: Summary
 
-After all issues are created, present a summary table. Indent sub-issues under their parents to show hierarchy:
+After all issues are created, present a summary table. Indent sub-issues under their parents to show hierarchy. If Step 6.5 created any ADRs, list them in a separate `ADRs:` section so the developer can see what was auto-recorded:
 
 ```
 Created N issues:
@@ -325,8 +377,13 @@ Created N issues:
     └ #44  Sign-in UI                        [feature, P1, S, Ready, Sprint 3]
   #45  Artist social links                   [feature, P2, S, Backlog]           (standalone)
 
+ADRs (auto-created for architectural shifts):
+  D-007  Switch session model to OAuth-based identity   (linked to #41)
+
 Project: https://github.com/<owner>/projects/<N>
 ```
+
+Omit the `ADRs:` section if Step 6.5 created none.
 
 ---
 
@@ -434,6 +491,15 @@ gh project item-edit \
   --single-select-option-id <STATUS_OPTIONS["In Progress"]>
 ```
 
+### Step 2.5: Determine execution mode
+
+Read the Project item's **Size** field captured in Step 1.
+
+- **Size = L or XL** → `MODE = autonomous`. Sizing the story L/XL is the developer's implicit authorization for end-to-end execution: the skill will not ask mid-flight questions, will commit and push after each phase, and will defer manual end-to-end verification to the developer after the PR is open.
+- **Size = XS, S, M, or unset** → `MODE = interactive`. The skill follows the existing review-before-commit, review-before-push flow.
+
+State the chosen mode to the developer in one line before continuing (e.g., `Picked #42 (Size: L) → autonomous mode.` or `Picked #43 (Size: M) → interactive mode.`). Both modes still run the [Dependency Safety Check](#dependency-safety-check) gate before any new dependency is introduced, and both run the pre-PR review battery once on the full diff (Step 6).
+
 ### Step 3: Create branch
 
 1. Get the issue title and type label: `gh issue view N --json title,labels`
@@ -468,44 +534,76 @@ For each phase listed in the Implementation Phases section:
    - Fetch current body: `gh issue view N --json body -q '.body'`
    - Find the specific `- [ ] Phase X:` line and replace `- [ ]` with `- [x]`
    - Update: `gh api repos/{REPO}/issues/N -f body="<updated body>"`
+4. **Commit and push (autonomous mode only)** — if `MODE = autonomous`:
+   - `git add <files changed in this phase>` (never `git add -A`).
+   - Commit referencing the issue and phase: `Refs #N: phase <X> — <phase description>`.
+   - Push: `git push -u origin <branch-name>` (first phase establishes upstream; subsequent phases push to the same branch).
+   - Progress is now visible on the remote; an interruption leaves the branch in a coherent state at phase boundaries.
+   - **Do not run the full review battery on each phase commit** — that runs once at PR-open time on the cumulative diff (Step 6).
 
-Repeat for each phase. If a phase reveals problems or new requirements, discuss with the developer before proceeding.
+   In `MODE = interactive`, do **not** commit or push at the end of a phase — code stays local until Step 7.
 
-**Do NOT commit anything yet.** Code changes are local only at this point.
+If a phase reveals problems or new requirements:
+
+- `MODE = interactive` — discuss with the developer before proceeding.
+- `MODE = autonomous` — decide and proceed. **Tightly related app-side changes that surface during the work are part of the same story** — fold them into the current phase or add a final phase for them. Surface the additions in the PR body so the developer sees them at PR-review time. Genuinely out-of-scope work goes into a new follow-up issue, not this one.
+
+End-of-step state:
+- `MODE = interactive` — code changes are local only.
+- `MODE = autonomous` — every phase is committed and pushed; the remote branch reflects current progress.
 
 ### Step 6: Final review
 
-After all phases are complete:
+After all phases are complete (both modes):
 
-1. Run the full test suite
-2. Check for lint or type errors if the project has those tools
-3. Review all changes: `git diff` to show the developer what was changed
-4. Present a summary of all changes, organized by phase
+1. Run the full test suite.
+2. Check for lint or type errors if the project has those tools.
+3. **Run the pre-PR review battery on the cumulative diff.** This runs once on the full set of changes, not per phase:
+   - Secrets scan.
+   - `security-review` skill (if available).
+   - `perf-review` skill (if available).
+   - `simplify` skill (if available).
+
+   Cumulative diff:
+   - `MODE = interactive` — `git diff` on the working tree (changes not yet committed).
+   - `MODE = autonomous` — `git diff <merge-base>...HEAD` on the branch.
+
+4. Review all changes: show what was changed.
+5. Present a summary of all changes, organized by phase. In `MODE = autonomous`, also list any tightly-related app-side changes that were folded into the work (these go into the PR body in Step 8).
 
 ### Step 7: User review and commit
 
-**Ask the developer to review the changes before committing.** Present:
-- A summary of files changed and what each change does
-- The proposed commit message(s)
+**`MODE = interactive`** — ask the developer to review the changes before committing. Present:
+- A summary of files changed and what each change does.
+- The proposed commit message(s).
 - Ask: "Would you like to review the diff, adjust anything, or proceed with committing?"
 
 **Only after the developer explicitly approves**, commit the changes:
-- `git add <specific files>` (never `git add -A`)
-- Create commit(s) referencing the issue: `Refs #N: <phase description>`
+- `git add <specific files>` (never `git add -A`).
+- Create commit(s) referencing the issue: `Refs #N: <phase description>`.
 
 **Do NOT push to remote yet.**
 
+**`MODE = autonomous`** — skip this step. All phases were already committed and pushed in Step 5.
+
 ### Step 8: Push and create PR
 
-**Ask the developer for permission before pushing and creating the PR.** Present:
-- The commit(s) that will be pushed
-- The proposed PR title and body
+**`MODE = interactive`** — ask the developer for permission before pushing and creating the PR. Present:
+- The commit(s) that will be pushed.
+- The proposed PR title and body.
 - Ask: "Ready to push and create the PR?"
 
 **Only after the developer explicitly approves**, push and create the PR:
 
-1. Push: `git push -u origin <branch-name>`
-2. Create PR:
+1. Push: `git push -u origin <branch-name>`.
+2. Create PR (template below).
+
+**`MODE = autonomous`** — the branch is already pushed (per phase, Step 5). Open the PR without asking. Use the same template, plus:
+
+- Add a `## Autonomous execution` section noting any tightly-related app-side changes that were folded in (per Step 5).
+- Add `Manual end-to-end verification deferred to reviewer.` near the top of the PR body so the reviewer knows e2e was not performed by the skill.
+
+PR template (both modes):
 
 ```
 gh pr create --title "<concise title>" --body "Closes #N
@@ -544,7 +642,7 @@ The PR-merged → `Status: Done` transition is handled by the GitHub workflow if
 
 ### Step 9: Report
 
-Show the PR URL and a summary of what was implemented, which phases were completed, and any remaining notes.
+Show the PR URL and a summary of what was implemented, which phases were completed, and any remaining notes. State the execution mode used (interactive or autonomous). For autonomous runs, explicitly remind the developer to perform manual end-to-end verification on the open PR.
 
 ---
 
@@ -784,8 +882,8 @@ C. **Implementation Phases** — propose 2–4 ordered, independently testable p
 D. **Risk Assessment** — technical risks, dependencies, unknowns.
 E. **Notes** — capture context.
 F. **Type label** — if missing, ask: feature / bug / refactor. `gh issue edit N --add-label "type:<x>"`.
-G. **Priority** — show current value (or "unset") and ask: "Keep / change to P0 / P1 / P2?"
-H. **Size** — show current value and ask: "Keep / change to XS / S / M / L / XL?"
+G. **Priority** — auto-decide P0 / P1 / P2 from scope and impact (do not ask). Compare against the current value; either keep it or update it. State the chosen value in the Step 9 report so the developer can override.
+H. **Size** — auto-decide XS / S / M / L / XL from the implementation phases and risk surface (do not ask). Compare against the current value; either keep it or update it. State the chosen value in the Step 9 report so the developer can override.
 I. **Parent linkage** — read current parent via:
 
    ```
@@ -811,7 +909,7 @@ gh api repos/{REPO}/issues/N -f body="<updated body>"
 
 ### Step 7: Update Project fields
 
-Set Priority and Size **only if the user changed them in Step 5G/H** (skip the field-edit call when the user chose "keep"):
+Set Priority and Size **only if the auto-decided value differs from the current Project field value** (skip the field-edit call when no change):
 
 ```
 gh project item-edit \
@@ -834,6 +932,10 @@ gh project item-edit \
   --single-select-option-id <STATUS_OPTIONS["Ready"]>
 ```
 
+### Step 7.5: Architectural Shift Auto-ADR
+
+If the refined issue represents an architectural shift per [Architectural Shift Auto-ADR](#architectural-shift-auto-adr), run that procedure for the issue and capture the resulting `D-<NNN>` for the Step 9 report.
+
 ### Step 8: Optional iteration assignment
 
 Ask: "Assign to an iteration? (current / new / specific / none / skip)"
@@ -845,6 +947,8 @@ Ask: "Assign to an iteration? (current / new / specific / none / skip)"
 
 ### Step 9: Report
 
+If Step 7.5 created an ADR, include it in the report.
+
 ```
 Refined #N:
   Title:     <title>
@@ -853,6 +957,7 @@ Refined #N:
   Size:      M
   Status:    Ready  (was Backlog)
   Iteration: <name or 'none'>
+  ADR:       D-007 (if Step 7.5 fired; otherwise omit this line)
 
 Available to /sprint pick.
 ```
