@@ -165,6 +165,17 @@ Fork this repo to customize:
 
 ## Uninstalling
 
+Claude Code (plugin marketplace install):
+
+```
+/plugin uninstall leverj@leverj-ai-skills
+/plugin marketplace remove leverj-ai-skills
+```
+
+Or run `/plugin` for the interactive UI and remove from the **Installed** and **Marketplaces** tabs.
+
+Manual install:
+
 ```bash
 # Global
 rm -rf ~/.claude/skills/sprint

@@ -23,6 +23,13 @@ Install the bundle once; every skill in it becomes available:
 
 Skills are then invoked as `/leverj:<skill>` — for example, `/leverj:sprint pick 42`.
 
+To uninstall:
+
+```
+/plugin uninstall leverj@leverj-ai-skills
+/plugin marketplace remove leverj-ai-skills
+```
+
 ### Other tools (manual)
 
 Skills are filesystem artifacts. Clone the bundle once, then point each tool at the per-skill discovery file.

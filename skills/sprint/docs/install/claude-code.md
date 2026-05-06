@@ -68,6 +68,19 @@ rm -rf ~/.claude/skills/sprint
 cp -R ~/sprint-workflow/skills/sprint ~/.claude/skills/sprint
 ```
 
+## Uninstall
+
+Plugin install:
+
+```
+/plugin uninstall leverj@leverj-ai-skills
+/plugin marketplace remove leverj-ai-skills
+```
+
+Or use `/plugin` for the interactive UI. Plugin files are cached under `~/.claude/plugins/`; the commands above clean that up.
+
+Manual install: `rm -rf ~/.claude/skills/sprint` (or `~/sprint-workflow` if you cloned there).
+
 ## Migration (existing manual installs)
 
 If you previously cloned the bundle directly into `~/.claude/skills/sprint` (pre-restructure), that checkout no longer has `SKILL.md` at its root after `git pull` — the skill source moved into `skills/sprint/`. Either switch to the marketplace install above, or re-do the manual install:
