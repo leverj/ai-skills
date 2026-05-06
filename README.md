@@ -14,14 +14,14 @@ Each skill lives under `skills/<name>/` and ships its own `SKILL.md`, install do
 
 ### Claude Code (plugin marketplace — recommended)
 
-Install any single skill from the bundle:
+Install the bundle once; every skill in it becomes available:
 
 ```
 /plugin marketplace add leverj/ai-skills
-/plugin install <skill>@leverj-ai-skills
+/plugin install leverj@leverj-ai-skills
 ```
 
-Example: `/plugin install sprint@leverj-ai-skills`.
+Skills are then invoked as `/leverj:<skill>` — for example, `/leverj:sprint pick 42`.
 
 ### Other tools (manual)
 
@@ -45,17 +45,16 @@ Per-skill, per-tool install instructions (Codex CLI, Gemini CLI, Cursor, OpenCod
 
 3. **(Optional) Add per-tool install docs** under `skills/<new-skill>/docs/install/<tool>.md` if the skill needs tool-specific setup.
 
-4. **Register the skill in [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json)** by adding an entry to the `plugins` array:
+4. **Register the skill in [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json)** by appending its directory to the `leverj` plugin's `skills` array:
 
-   ```json
-   {
-     "name": "<new-skill>",
-     "description": "<one-liner — what the skill does and when to use it>",
-     "source": "./",
-     "strict": false,
-     "skills": ["./skills/<new-skill>"]
-   }
    ```
+   "skills": [
+     "./skills/sprint",
+     "./skills/<new-skill>"
+   ]
+   ```
+
+   It will then be invokable as `/leverj:<new-skill>`.
 
 5. **Add a row** to the **Skills in this bundle** table above with a one-line description and links to the skill's `SKILL.md` and `README.md` (if present).
 

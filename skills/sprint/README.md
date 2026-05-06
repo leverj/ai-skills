@@ -27,8 +27,10 @@ Claude Code (plugin marketplace — recommended):
 
 ```
 /plugin marketplace add leverj/ai-skills
-/plugin install sprint@leverj-ai-skills
+/plugin install leverj@leverj-ai-skills
 ```
+
+Then invoke as `/leverj:sprint <subcommand>` — e.g. `/leverj:sprint pick 42`.
 
 Claude Code (manual clone):
 

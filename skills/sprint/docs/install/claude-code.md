@@ -8,10 +8,10 @@ In Claude Code:
 
 ```
 /plugin marketplace add leverj/ai-skills
-/plugin install sprint@leverj-ai-skills
+/plugin install leverj@leverj-ai-skills
 ```
 
-`/sprint` commands become available immediately. Updates flow via `/plugin update`.
+Skills are namespaced under the plugin: invoke as `/leverj:sprint <subcommand>` (e.g. `/leverj:sprint pick 42`). Updates flow via `/plugin update`.
 
 ## Install (manual) — git clone
 
