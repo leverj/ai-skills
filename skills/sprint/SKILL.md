@@ -1282,7 +1282,7 @@ Next: /sprint plan to add work, /sprint status for the dashboard.
 **Purpose**: Pull the latest version of the **skills bundle**. The sprint skill ships as part of a multi-skill bundle, and the upgrade procedure depends on how it was installed:
 
 - **Git checkout install** (manual clone): `git fetch` + `git pull --ff-only` against the bundle root. Optionally switches to a specific branch for testing pre-merge changes.
-- **Claude Code plugin install** (marketplace): the plugin cache is content-addressed and read-only; pulling the bundle means refreshing the marketplace and reinstalling via Claude Code's `/plugin` commands. The bundle's `marketplace.json` version is what gates the update — a new commit on the source branch isn't visible to end users until the version is bumped.
+- **Claude Code plugin install** (marketplace): the plugin cache is content-addressed and read-only, so the skill drives the supported `claude plugin ...` CLI to refresh the marketplace and update the installed plugin, then prompts the user to restart Claude Code. The bundle's `marketplace.json` version is what gates the update — a new commit on the source branch isn't visible to end users until the version is bumped.
 
 Either way, updates land for every skill in the bundle, not just sprint. Step 1 detects the install type and routes.
 
@@ -1452,46 +1452,73 @@ For MODE `dry-run`, replace "Upgraded" with "Would upgrade" and skip the "Files 
 
 ### Plugin Upgrade Path
 
-Used when Step 1 classified the install as a Claude Code plugin marketplace install. The plugin cache (`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/...`) is content-addressed and immutable — Steps 2–10 of the git path do not apply.
+Used when Step 1 classified the install as a Claude Code plugin marketplace install. The plugin cache (`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/...`) is content-addressed and immutable, so the skill cannot mutate it directly. Instead, the skill drives the supported `claude plugin ...` CLI to refresh the marketplace and the installed plugin, then asks the user to restart Claude Code.
 
 1. **Identify the marketplace and plugin.** Read `~/.claude/plugins/installed_plugins.json` and find the entry whose `installPath` is the closest ancestor of `<SKILL DIR>`. The key has shape `<plugin>@<marketplace>`. Extract:
    - `PLUGIN_NAME`, `MARKETPLACE_NAME`
-   - `installed_version` (the entry's `version` field)
-   - `installed_commit` (the entry's `gitCommitSha`, shortened to 7 chars for display)
+   - `BEFORE_VERSION` (the entry's `version` field)
+   - `BEFORE_COMMIT` (the entry's `gitCommitSha`, shortened to 7 chars for display)
+   - `SCOPE` (the entry's `scope` field — typically `user`)
 
-2. **Look up the marketplace source.** Read `~/.claude/plugins/known_marketplaces.json` and pull `<MARKETPLACE_NAME>.source.repo` (e.g., `leverj/ai-skills`).
+2. **Look up the marketplace source.** Read `~/.claude/plugins/known_marketplaces.json` and pull `<MARKETPLACE_NAME>.source.repo` (e.g., `leverj/ai-skills`). Used for the final report only.
 
-3. **Read the published bundle version**, if reachable. The bundle root is `~/.claude/plugins/marketplaces/<MARKETPLACE_NAME>/.claude-plugin/marketplace.json`; the field is `metadata.version`. If this matches `installed_version`, the local install is already at the latest published version — note that explicitly in the report.
-
-4. **Tell the user the flow.** Plugin updates are gated by the bundle's `marketplace.json` `metadata.version`, not by source-branch tip. New commits are invisible to end users until that version is bumped on the marketplace's tracked branch.
-
-   Print:
+3. **Verify the `claude` CLI is on PATH.** Run `command -v claude`. If empty, hard-stop:
 
    ```
-   Plugin marketplace install detected.
-     Marketplace:     <MARKETPLACE_NAME>
-     Plugin:          <PLUGIN_NAME>
-     Installed:       v<installed_version>  (commit <installed_commit>)
-     Published (HEAD): v<published_version>  ← only if Step 3 succeeded
-     Source repo:     https://github.com/<source.repo>
-
-   [If installed_version == published_version:]
-   Local install is at the latest published version. To pull commits newer
-   than the published version, you (as maintainer) must bump the bundle
-   version below first.
-
-   Maintainer steps (only if there are new commits to release):
-     1. In the source repo, bump `metadata.version` in `.claude-plugin/marketplace.json`.
-     2. Commit and push to the marketplace's tracked branch.
-
-   End-user steps (run in Claude Code, not as shell commands):
+   `claude` CLI not found on PATH. Plugin upgrade requires the Claude Code CLI.
+   Upgrade manually inside Claude Code:
      /plugin marketplace update <MARKETPLACE_NAME>
      /plugin install <PLUGIN_NAME>@<MARKETPLACE_NAME>
    ```
 
-   The exact `/plugin` subcommand names can vary across Claude Code versions. If `install` does not refresh in place, try `/plugin update` or run `/plugin help` to see the equivalent verb.
+   Do not continue.
 
-5. Stop. The skill does not invoke `/plugin` itself — those are harness commands; the developer runs them.
+4. **Refresh the marketplace.**
+
+   ```
+   claude plugin marketplace update <MARKETPLACE_NAME>
+   ```
+
+   Surface the command's stdout/stderr. If it exits non-zero, stop and report the failure verbatim.
+
+5. **Read the published version after refresh.** From `~/.claude/plugins/marketplaces/<MARKETPLACE_NAME>/.claude-plugin/marketplace.json`, read `metadata.version` → `PUBLISHED_VERSION`.
+
+   If `PUBLISHED_VERSION == BEFORE_VERSION`, the plugin is already at the latest published version. Print:
+
+   ```
+   Already at latest published version (v<BEFORE_VERSION>).
+   To pull commits newer than this, the bundle's `metadata.version` in
+   `.claude-plugin/marketplace.json` must be bumped on the source repo
+   (https://github.com/<source.repo>) first. That step is the maintainer's
+   release responsibility and is outside the scope of `/sprint upgrade`.
+   ```
+
+   Stop. Do not run `claude plugin update` — there is nothing to apply.
+
+6. **Update the plugin.**
+
+   ```
+   claude plugin update <PLUGIN_NAME>@<MARKETPLACE_NAME> --scope <SCOPE>
+   ```
+
+   Surface stdout/stderr. If it exits non-zero, stop and report the failure verbatim.
+
+7. **Re-read installed state.** Re-read `~/.claude/plugins/installed_plugins.json` and capture the new `version` and `gitCommitSha` for the same plugin key → `AFTER_VERSION`, `AFTER_COMMIT` (shortened to 7 chars for display).
+
+8. **Report and prompt for restart.**
+
+   ```
+   Plugin upgraded:
+     Marketplace: <MARKETPLACE_NAME>
+     Plugin:      <PLUGIN_NAME>
+     Version:     v<BEFORE_VERSION> (<BEFORE_COMMIT>) → v<AFTER_VERSION> (<AFTER_COMMIT>)
+     Source repo: https://github.com/<source.repo>
+
+   Restart Claude Code to apply the upgrade — the currently-running session
+   still holds the previous version of every skill in this bundle.
+   ```
+
+   Stop.
 
 ---
 
