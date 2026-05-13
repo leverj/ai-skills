@@ -1282,7 +1282,7 @@ Next: /sprint plan to add work, /sprint status for the dashboard.
 **Purpose**: Pull the latest version of the **skills bundle**. The sprint skill ships as part of a multi-skill bundle, and the upgrade procedure depends on how it was installed:
 
 - **Git checkout install** (manual clone): `git fetch` + `git pull --ff-only` against the bundle root. Optionally switches to a specific branch for testing pre-merge changes.
-- **Claude Code plugin install** (marketplace): the plugin cache is content-addressed and read-only, so the skill drives the supported `claude plugin ...` CLI to refresh the marketplace and update the installed plugin, then prompts the user to restart Claude Code. The bundle's `marketplace.json` version is what gates the update — a new commit on the source branch isn't visible to end users until the version is bumped.
+- **Claude Code plugin install** (marketplace): the plugin cache is content-addressed and read-only, so the skill drives the supported `claude plugin ...` CLI to refresh the marketplace and update the installed plugin, then prompts the user to run `/reload-plugins` (or restart). The bundle's `marketplace.json` version is what gates the update — a new commit on the source branch isn't visible to end users until the version is bumped.
 
 Either way, updates land for every skill in the bundle, not just sprint. Step 1 detects the install type and routes.
 
@@ -1514,11 +1514,15 @@ Used when Step 1 classified the install as a Claude Code plugin marketplace inst
      Version:     v<BEFORE_VERSION> (<BEFORE_COMMIT>) → v<AFTER_VERSION> (<AFTER_COMMIT>)
      Source repo: https://github.com/<source.repo>
 
-   Restart Claude Code to apply the upgrade — the currently-running session
-   still holds the previous version of every skill in this bundle.
+   Run `/reload-plugins` to apply the upgrade in the current session
+   (or restart Claude Code if reload misbehaves). The running session
+   still holds the previous version of every skill in this bundle until
+   one of those happens.
    ```
 
-   Stop.
+   Stop. Do not attempt to invoke `/reload-plugins` from inside the skill —
+   it is a harness-internal slash command with no CLI equivalent, so only
+   the user can run it.
 
 ---
 
