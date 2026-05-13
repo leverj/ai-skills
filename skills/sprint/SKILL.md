@@ -68,6 +68,8 @@ Parse the first word of the user's arguments to determine the command:
 
 If the first word doesn't match any command, treat the entire input as a plan description and go to [Plan Command](#plan-command). (The verb picker is only for the genuinely empty invocation.)
 
+**Before executing the routed command's first step**, run the [Skill Version Check Preamble](#skill-version-check-preamble) — **except** for `upgrade`, `help`, and `setup`, which skip it.
+
 ### Verb Picker
 
 Shown when `/sprint` is invoked with no arguments. Print verbatim:
@@ -88,6 +90,85 @@ Shown when `/sprint` is invoked with no arguments. Print verbatim:
 After the developer answers:
 - **1–8** → route to the matching command with no further arguments (each command handles its own no-arg behavior — `plan` enters its mode prompt, `pick` lists Ready items, etc.).
 - **9** → read the description. If it starts with a known verb, route there with the remainder as arguments. Otherwise treat the whole description as a plan input and go to the Plan Command.
+
+---
+
+## Skill Version Check Preamble
+
+**Purpose**: At most once every 24 hours, check whether a newer skill bundle has been published, and surface a one-line notice if so. Non-blocking — the user can keep working at the current version regardless of the outcome.
+
+**When to run**: As the very first thing for `plan`, `pick`, `refine`, `status`, and `decide`. **Skipped** for:
+
+- `upgrade` — already handles version logic.
+- `help` — purely informational, latency-sensitive.
+- `setup` — runs before sprint context exists, and may run before the marketplace is even reachable; latency-sensitive.
+
+Any refresh failure (network, auth, etc.) is non-fatal: do **not** touch the marker (so the next invocation retries) and continue silently. The user should never be blocked from working because the marketplace was unreachable.
+
+### Step 1: Detect install type
+
+Same classification as [Upgrade Command Step 1](#step-1-detect-install-type-and-validate):
+
+- `<SKILL DIR>` contains `.claude/plugins/cache/` → **plugin install**, continue to Step 2a.
+- `git -C <SKILL DIR> rev-parse --is-inside-work-tree` succeeds → **git checkout install**, continue to Step 2b.
+- Otherwise → **manual install**, skip the check entirely.
+
+### Step 2a: Plugin install — refresh, then compare
+
+Identify `MARKETPLACE_NAME` and `PLUGIN_NAME` as in [Plugin Upgrade Path Step 1](#plugin-upgrade-path) (closest-ancestor lookup of `<SKILL DIR>` in `~/.claude/plugins/installed_plugins.json`).
+
+```
+MARKER = ~/.claude/plugins/marketplaces/<MARKETPLACE_NAME>/.last-version-check
+```
+
+If `MARKER` is missing or its mtime is older than 24 hours ago, refresh quietly:
+
+```
+claude plugin marketplace update <MARKETPLACE_NAME> >/dev/null 2>&1 && touch <MARKER>
+```
+
+(Suppress the command's stdout/stderr — the user does not need to see the refresh chatter on every check.)
+
+Then read:
+
+- `INSTALLED` ← the `version` field of the matching `<PLUGIN_NAME>@<MARKETPLACE_NAME>` entry in `~/.claude/plugins/installed_plugins.json`.
+- `PUBLISHED` ← `metadata.version` in `~/.claude/plugins/marketplaces/<MARKETPLACE_NAME>/.claude-plugin/marketplace.json`.
+
+If `INSTALLED != PUBLISHED`, print exactly **one** line before continuing:
+
+```
+Skill update available: v<INSTALLED> → v<PUBLISHED>. Run `/sprint upgrade` to apply.
+```
+
+Then continue with the routed command's own first step. Do not block.
+
+### Step 2b: Git checkout install — fetch, then compare
+
+```
+BUNDLE_ROOT = git -C <SKILL DIR> rev-parse --show-toplevel
+MARKER      = <BUNDLE_ROOT>/.git/.sprint-last-version-check
+```
+
+(Placed inside `.git/` so the marker never shows up as an untracked file in `git status`.)
+
+If `MARKER` is missing or its mtime is older than 24 hours ago, fetch quietly:
+
+```
+git -C <BUNDLE_ROOT> fetch origin --quiet && touch <MARKER>
+```
+
+Then read:
+
+- `CURRENT_BRANCH` ← `git -C <BUNDLE_ROOT> rev-parse --abbrev-ref HEAD`
+- `BEHIND` ← `git -C <BUNDLE_ROOT> rev-list --count HEAD..origin/<CURRENT_BRANCH>`
+
+If `BEHIND > 0`, print exactly **one** line before continuing:
+
+```
+Skill update available: <BEHIND> new commit(s) on origin/<CURRENT_BRANCH>. Run `/sprint upgrade` to apply.
+```
+
+Then continue with the routed command's own first step. Do not block.
 
 ---
 
