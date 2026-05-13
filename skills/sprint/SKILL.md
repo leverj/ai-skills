@@ -4,7 +4,9 @@ description: >
   Scrum-aligned development workflow on top of GitHub Projects v2. Commands: plan (create
   requirements), pick (claim & implement), decide (record decisions), status (dashboard),
   refine (groom items), setup (bootstrap Project), upgrade (pull latest skill). Uses gh
-  CLI for issues + Project items, and `.dev/decisions/` for ADRs.
+  CLI for issues + Project items, and `.dev/decisions/` for ADRs. Both plan and pick offer
+  an explore mode for discovery-driven work — placeholder issue up front, spec backfilled
+  after implementation.
 allowed-tools: Bash(gh *) Bash(git *) Bash(ls *) Bash(mkdir *) Bash(cat *) Read Write Edit Glob Grep Agent
 argument-hint: "<plan|pick|decide|status|refine|setup|upgrade|help> [arguments]"
 effort: high
@@ -54,7 +56,8 @@ If the tool does not auto-substitute, treat the placeholder as a contextual refe
 
 Parse the first word of the user's arguments to determine the command:
 
-- **`plan`** (or no arguments) → Go to [Plan Command](#plan-command)
+- **(no arguments)** → Show the [Verb Picker](#verb-picker) and wait for the developer's choice. Do **not** fall through to plan.
+- **`plan`** → Go to [Plan Command](#plan-command)
 - **`pick`** → Go to [Pick Command](#pick-command)
 - **`decide`** → Go to [Decide Command](#decide-command)
 - **`status`** → Go to [Status Command](#status-command)
@@ -63,7 +66,28 @@ Parse the first word of the user's arguments to determine the command:
 - **`upgrade`** → Go to [Upgrade Command](#upgrade-command)
 - **`help`** → Go to [Help Command](#help-command)
 
-If the first word doesn't match any command, treat the entire input as a plan description and go to [Plan Command](#plan-command).
+If the first word doesn't match any command, treat the entire input as a plan description and go to [Plan Command](#plan-command). (The verb picker is only for the genuinely empty invocation.)
+
+### Verb Picker
+
+Shown when `/sprint` is invoked with no arguments. Print verbatim:
+
+```
+/sprint — pick a command:
+  1. plan     create or capture requirements
+  2. pick     claim a Ready item and implement
+  3. refine   groom a Backlog item into Ready
+  4. status   Project board snapshot
+  5. decide   record an architectural decision
+  6. setup    bootstrap or relink the Project (one-time)
+  7. upgrade  pull the latest skill bundle
+  8. help     full reference
+  9. Something else — describe
+```
+
+After the developer answers:
+- **1–8** → route to the matching command with no further arguments (each command handles its own no-arg behavior — `plan` enters its mode prompt, `pick` lists Ready items, etc.).
+- **9** → read the description. If it starts with a known verb, route there with the remainder as arguments. Otherwise treat the whole description as a plan input and go to the Plan Command.
 
 ---
 
@@ -204,6 +228,33 @@ Run [Resolve Project Context](#resolve-project-context).
 ### Step 1: Discuss and decompose requirements
 
 Ask the developer what they want to build, fix, or improve. They may give anything from a one-liner ("add social login") to a detailed spec.
+
+Then ask the mode:
+
+```
+Plan as:
+  1. Structured — Grill Me, acceptance criteria, phases
+  2. Explore — record a one-liner; spec backfilled after implementation
+  3. Something else — describe
+```
+
+- **(1)** → continue with this step (Grill Me + decomposition) and the rest of the Plan Command as written.
+- **(2)** → skip Grill Me, decomposition, parent grouping, Steps 2 (structured body), 3 (iteration), 5 (DoR), and 6.5 (auto-ADR). In Step 4 set type label by best guess (default `type:feature`). In Step 6 use the **explore placeholder body** below; set Status=Ready, Priority=P2, Size unset. Then jump to Step 7 (summary).
+- **(3)** → ask the developer what they want; route to (1) or (2).
+
+**Explore placeholder body** (used in Step 6 when mode = explore):
+
+```
+## Idea
+<one-liner from developer>
+
+## Mode
+Explore — spec backfilled after implementation. Run `/sprint refine <N>` first to convert to a structured issue.
+```
+
+The `## Mode` line is the marker [Pick Command](#pick-command) reads to detect explore-mode issues.
+
+Continue (structured mode only):
 
 Run the [Grill Me Protocol](#grill-me-protocol) to flesh out the requirement — small, focused turns, one question at a time, adapting to each answer.
 
@@ -389,7 +440,7 @@ Omit the `ADRs:` section if Step 6.5 created none.
 
 ## Pick Command
 
-**Purpose**: Claim a Project item and implement it phase by phase.
+**Purpose**: Claim a Project item and implement it — either phase by phase against a spec (default) or as an instruction-driven explore loop (selected at Step 4.5).
 
 Arguments after `pick` are optional:
 - `/sprint pick` — show available items and let the developer choose
@@ -521,6 +572,30 @@ Parse the issue body to extract:
 - **Acceptance Criteria** — drives what to test
 - **Implementation Phases** — drives the work order
 - **Risk Assessment** — be aware during implementation
+- **`## Mode: Explore` marker** — if present, the issue is an explore placeholder (no spec to read against)
+
+### Step 4.5: Choose execution mode
+
+Surface the choice:
+
+```
+Implement #N:
+  1. Work as planned — phase by phase against acceptance criteria
+  2. Explore — instruction-driven loop; spec backfilled at end
+  3. Something else — describe
+
+To convert an explore issue to structured before working, run `/sprint refine N`.
+```
+
+Defaults:
+- Issue has the `## Mode: Explore` marker → default **(2)**. Option **(1)** is unavailable (no spec); if the developer picks it, redirect: "no spec yet — run `/sprint refine N` first."
+- Issue has Acceptance Criteria + Implementation Phases → default **(1)**. If the developer picks **(2)**, show one line: "This will ignore the acceptance criteria and phases; the body will be backfilled at the end. Proceed?" Confirm before continuing.
+- Neither marker nor spec → default **(2)**.
+
+Route:
+- **(1)** → Step 5 (existing phase-by-phase). The Size-based `MODE = autonomous | interactive` from Step 2.5 applies as today.
+- **(2)** → Step 5b (explore loop). `MODE` is forced to **interactive** — there is no autonomous explore.
+- **(3)** → ask the developer what they want; route to (1) or (2).
 
 ### Step 5: Implement phase by phase
 
@@ -551,6 +626,28 @@ If a phase reveals problems or new requirements:
 End-of-step state:
 - `MODE = interactive` — code changes are local only.
 - `MODE = autonomous` — every phase is committed and pushed; the remote branch reflects current progress.
+
+### Step 5b: Explore loop (mode = explore only)
+
+Skip Step 5 entirely when mode = explore. Run this loop instead.
+
+Repeat until the developer says **done**:
+
+1. **Ask for the next instruction** — what do they want to try?
+2. **Snapshot** the files about to be touched so `discard` can restore them. Either:
+   - `git stash push --keep-index --include-untracked -m "explore-<N>-<step>" -- <paths>` and remember the stash ref, or
+   - capture file contents in memory if only a few files are involved.
+3. **Apply the change**. Do **not** stage, do **not** commit.
+
+   **Dependency safety gate**: before editing any manifest file or running any install/add command that introduces a new dependency or changes a resolved version, run the [Dependency Safety Check](#dependency-safety-check). Same gate as Step 5; it applies inside the loop too.
+4. **Surface the change** — a compact diff summary. For UX work, add a one-line "look here" pointer (URL, command to run, file to open). The developer reviews the result outside the loop.
+5. Ask: **keep / change / discard / done?**
+   - **keep** → drop the snapshot; loop to (1)
+   - **change** → ask what to adjust; modify in place; loop back to (4)
+   - **discard** → restore the snapshot, drop it; loop to (1)
+   - **done** → exit the loop
+
+End-of-step state: all kept changes accumulate in the working tree. Nothing has been committed yet. Continue to Step 6.
 
 ### Step 6: Final review
 
@@ -585,6 +682,18 @@ After all phases are complete (both modes):
 **Do NOT push to remote yet.**
 
 **`MODE = autonomous`** — skip this step. All phases were already committed and pushed in Step 5.
+
+**Explore mode (came through Step 5b)** — runs as interactive, with one extra step before commits:
+
+1. **Backfill the issue body** before presenting commits. Replace the placeholder body with a proper structured body derived from what was actually built:
+   - **User Story**: inferred from the kept changes and the original idea.
+   - **Acceptance Criteria**: WHEN/THEN/SHALL lines derived from observable behavior of the final state.
+   - **Implementation Phases**: a single phase, checked: `- [x] Phase 1: Implemented via discovery — see commits.`
+   - **Risk Assessment** and **Notes**: brief, drawn from anything notable that came up in the loop.
+
+   Update on GitHub: `gh api repos/{REPO}/issues/N -f body="<backfilled body>"`. Show the proposed body to the developer first; let them edit before it goes up.
+2. **Propose one squashed commit** by default — `Refs #N: <one-line summary>`. If the kept changes break cleanly into 2–3 logical groups, offer that split. Commit only after explicit approval.
+3. Step 8 (push + PR) runs as interactive; the PR body includes the backfilled spec.
 
 ### Step 8: Push and create PR
 
@@ -1346,9 +1455,13 @@ Print verbatim:
 
   plan [description]              Create structured requirements (Issues + Project items).
                                   Optional free-form description; otherwise interactive.
+                                  Mode prompt: structured / explore / something else.
+                                  Explore records a one-line placeholder; spec backfilled later.
 
-  pick [N]                        Claim a Ready item and implement it phase by phase.
+  pick [N]                        Claim a Ready item and implement it.
                                   N = issue number; if omitted, lists Ready items.
+                                  Mode prompt: work as planned / explore / something else.
+                                  To convert an explore issue to structured first: /sprint refine N.
 
   refine [N]                      Groom a Backlog item into Ready: add acceptance criteria,
                                   phases, risks, Priority, Size.
@@ -1373,7 +1486,10 @@ Print verbatim:
 
   help                            Show this help.
 
+Tip: run /sprint with no arguments to get an interactive picker for the verbs above.
+
 Examples:
+  /sprint
   /sprint plan
   /sprint pick 42
   /sprint status all
