@@ -1279,7 +1279,12 @@ Next: /sprint plan to add work, /sprint status for the dashboard.
 
 ## Upgrade Command
 
-**Purpose**: Pull the latest version of the **skills bundle** from its git origin. The sprint skill ships as part of a multi-skill bundle (`skills/<name>/...` under one git checkout); this command runs `git fetch` + `git pull --ff-only` against the bundle root, so updates land for every skill installed from the bundle — not just sprint. Optionally switches to a specific branch for testing pre-merge changes.
+**Purpose**: Pull the latest version of the **skills bundle**. The sprint skill ships as part of a multi-skill bundle, and the upgrade procedure depends on how it was installed:
+
+- **Git checkout install** (manual clone): `git fetch` + `git pull --ff-only` against the bundle root. Optionally switches to a specific branch for testing pre-merge changes.
+- **Claude Code plugin install** (marketplace): the plugin cache is content-addressed and read-only; pulling the bundle means refreshing the marketplace and reinstalling via Claude Code's `/plugin` commands. The bundle's `marketplace.json` version is what gates the update — a new commit on the source branch isn't visible to end users until the version is bumped.
+
+Either way, updates land for every skill in the bundle, not just sprint. Step 1 detects the install type and routes.
 
 ### Invocation forms
 
@@ -1288,19 +1293,22 @@ Next: /sprint plan to add work, /sprint status for the dashboard.
 - `/sprint upgrade reset` — switch back to the repo's default branch (`master` or `main`, auto-detected) and pull.
 - `/sprint upgrade check` — dry-run. Fetches and reports what would change, but does not switch or pull.
 
-### Step 1: Validate skill directory
+### Step 1: Detect install type and validate
 
-Verify `<SKILL DIR>` is a git checkout of the sprint skill:
+Classify `<SKILL DIR>` before doing anything else. The skill ships in two distinct install shapes; running the wrong upgrade procedure for the shape will fail confusingly.
 
-```
-git -C <SKILL DIR> rev-parse --is-inside-work-tree
-```
+Detection rule:
 
-If this fails: "Skill at `<SKILL DIR>` is not a git checkout — was it copied manually or installed via a package manager? Re-clone with: `git clone <repo-url> <SKILL DIR>`." Stop.
+1. If `<SKILL DIR>` contains the path segment `.claude/plugins/cache/`, treat as **plugin marketplace install**. The cache is content-addressed and read-only — `git pull` cannot mutate it.
+2. Otherwise run `git -C <SKILL DIR> rev-parse --is-inside-work-tree`. On success, treat as **git checkout install**. On failure, treat as **manual (non-git) install**.
 
-Verify `<SKILL DIR>/SKILL.md` exists:
+Also verify `<SKILL DIR>/SKILL.md` exists. If not: "Skill at `<SKILL DIR>` doesn't contain SKILL.md. Aborting upgrade." Stop.
 
-If not: "Skill at `<SKILL DIR>` doesn't contain SKILL.md. Aborting upgrade." Stop.
+Route on install type:
+
+- **Plugin marketplace** → run [Plugin Upgrade Path](#plugin-upgrade-path) and stop. Do NOT continue to Step 2.
+- **Git checkout** → continue to Step 2.
+- **Manual install** → tell the user: "Skill at `<SKILL DIR>` is not a git checkout and not under a plugin cache. Reinstall from the source repo (clone it over this directory) or install via the plugin marketplace. The `/sprint upgrade` command only automates git-based and plugin-based installs." Stop.
 
 ### Step 2: Detect default branch
 
@@ -1441,6 +1449,49 @@ Changes take effect on next invocation of any updated skill
 Render only the buckets that have entries (don't print empty `skills/<name>/` headings).
 
 For MODE `dry-run`, replace "Upgraded" with "Would upgrade" and skip the "Files updated (by skill)" section (just show the commit range, skills-with-changes summary, and oneline log).
+
+### Plugin Upgrade Path
+
+Used when Step 1 classified the install as a Claude Code plugin marketplace install. The plugin cache (`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/...`) is content-addressed and immutable — Steps 2–10 of the git path do not apply.
+
+1. **Identify the marketplace and plugin.** Read `~/.claude/plugins/installed_plugins.json` and find the entry whose `installPath` is the closest ancestor of `<SKILL DIR>`. The key has shape `<plugin>@<marketplace>`. Extract:
+   - `PLUGIN_NAME`, `MARKETPLACE_NAME`
+   - `installed_version` (the entry's `version` field)
+   - `installed_commit` (the entry's `gitCommitSha`, shortened to 7 chars for display)
+
+2. **Look up the marketplace source.** Read `~/.claude/plugins/known_marketplaces.json` and pull `<MARKETPLACE_NAME>.source.repo` (e.g., `leverj/ai-skills`).
+
+3. **Read the published bundle version**, if reachable. The bundle root is `~/.claude/plugins/marketplaces/<MARKETPLACE_NAME>/.claude-plugin/marketplace.json`; the field is `metadata.version`. If this matches `installed_version`, the local install is already at the latest published version — note that explicitly in the report.
+
+4. **Tell the user the flow.** Plugin updates are gated by the bundle's `marketplace.json` `metadata.version`, not by source-branch tip. New commits are invisible to end users until that version is bumped on the marketplace's tracked branch.
+
+   Print:
+
+   ```
+   Plugin marketplace install detected.
+     Marketplace:     <MARKETPLACE_NAME>
+     Plugin:          <PLUGIN_NAME>
+     Installed:       v<installed_version>  (commit <installed_commit>)
+     Published (HEAD): v<published_version>  ← only if Step 3 succeeded
+     Source repo:     https://github.com/<source.repo>
+
+   [If installed_version == published_version:]
+   Local install is at the latest published version. To pull commits newer
+   than the published version, you (as maintainer) must bump the bundle
+   version below first.
+
+   Maintainer steps (only if there are new commits to release):
+     1. In the source repo, bump `metadata.version` in `.claude-plugin/marketplace.json`.
+     2. Commit and push to the marketplace's tracked branch.
+
+   End-user steps (run in Claude Code, not as shell commands):
+     /plugin marketplace update <MARKETPLACE_NAME>
+     /plugin install <PLUGIN_NAME>@<MARKETPLACE_NAME>
+   ```
+
+   The exact `/plugin` subcommand names can vary across Claude Code versions. If `install` does not refresh in place, try `/plugin update` or run `/plugin help` to see the equivalent verb.
+
+5. Stop. The skill does not invoke `/plugin` itself — those are harness commands; the developer runs them.
 
 ---
 
