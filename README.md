@@ -9,6 +9,7 @@ Each skill lives under `skills/<name>/` and ships its own `SKILL.md`, install do
 | Skill | What it does | Docs |
 | --- | --- | --- |
 | **sprint** | Scrum/kanban-aware development workflow on top of GitHub Projects v2. Issues are requirements; Project fields are state; ADRs in `.dev/decisions/`. | [SKILL.md](skills/sprint/SKILL.md) · [README](skills/sprint/README.md) |
+| **triage** | End-to-end triage & fix loop over a long-lived backlog — an epic's open sub-issues **or** a GitHub Projects v2 board (set in `.dev/triage.json`, overridable per call with `--epic`/`--project`). Auto-closes duplicates and won't-fixes, bundles trivial dep bumps into one PR per ecosystem, ships them. | [SKILL.md](skills/triage/SKILL.md) |
 
 ## Install
 

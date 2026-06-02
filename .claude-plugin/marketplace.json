@@ -6,16 +6,17 @@
   },
   "metadata": {
     "description": "Agent skills bundle for AI coding tools",
-    "version": "0.3.3"
+    "version": "0.4.0"
   },
   "plugins": [
     {
       "name": "leverj",
-      "description": "Leverj agent skills bundle. Includes: sprint (scrum/kanban workflow on GitHub Projects v2 — issues are requirements, Project fields are state, ADRs in .dev/decisions/).",
+      "description": "Leverj agent skills bundle. Includes: sprint (scrum/kanban workflow on GitHub Projects v2 — issues are requirements, Project fields are state, ADRs in .dev/decisions/); triage (end-to-end triage & fix loop over an epic's sub-issues or a GitHub Projects v2 board — auto-closes dup/wontfix, bundles trivial dep bumps into PRs).",
       "source": "./",
       "strict": false,
       "skills": [
-        "./skills/sprint"
+        "./skills/sprint",
+        "./skills/triage"
       ]
     }
   ]
