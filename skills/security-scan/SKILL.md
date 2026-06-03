@@ -1,14 +1,16 @@
 ---
 name: security-scan
 description: >
-  Run the security-scan scanner against a repo via the published
-  `leverj/security-scan` Docker image. Detects the repo's tech stack, runs
-  OSV-Scanner, Gitleaks, Semgrep, Trivy, Trufflehog (and optionally LLM-driven
-  Codex + Gemma SAST with bidirectional cross-validation), scans base-image
-  CVEs, and runs Supabase live-DB advisor queries. Files each finding into a
-  GitHub Projects v2 board. On every run, checks Docker Hub for a newer image
-  DIGEST and — on user confirmation — pulls it and applies any new
-  config-schema migrations declared in the image's SECURITY-SCAN-MANIFEST.yaml.
+  Run the security-scan suite against a repo. The deterministic lanes
+  (OSV-Scanner, Gitleaks, Semgrep, Trivy, Trufflehog, image-CVE, Supabase live)
+  run inside the published `leverj/security-scan` Docker image. The optional
+  LLM lanes (Codex + Gemma SAST with bidirectional cross-validation) run
+  host-side via the `security-scan-llm` companion tool bundled in this plugin
+  (see `tools/security-scan-llm/`). Both substrates file into the same GitHub
+  Projects v2 board with a byte-identical fingerprint scheme. On every run,
+  checks Docker Hub for a newer image DIGEST and — on user confirmation —
+  pulls it and applies any new config-schema migrations declared in the
+  image's SECURITY-SCAN-MANIFEST.yaml.
   Use when the user says "scan", "/security-scan", "run security-scan",
   "scan this repo for security issues", "check for secrets / CVEs / SAST
   issues", or "audit dependencies".
@@ -247,6 +249,64 @@ op run --env-file="${CONFIG_DIR}/${ENV_FILE}" -- \
 
 `op` populates this shell's env JIT; `docker run -e GITHUB_TOKEN` (no value!)
 copies it into the container without putting it on argv.
+
+### Phase 4b — LLM lane (host-side, optional)
+
+The Docker image runs **deterministic scanners only** (osv, gitleaks, semgrep,
+trivy, trufflehog, supabase, image-scan). The LLM lanes — `codex` and `gemma`
+SAST + bidirectional cross-validation — run from the **host**, not the
+container, because:
+
+- `codex` is a host-side CLI subprocess tied to the user's ChatGPT/Codex
+  subscription. The container doesn't ship the `codex` binary and can't reach
+  the user's login session.
+- `gemma` talks to Ollama, which lives on the host (default `localhost:11434`).
+  Source content never crosses the loopback boundary.
+
+Both substrates file into the **same Projects v2 board** with the **same
+fingerprint scheme**, so findings dedup across runs regardless of which
+substrate produced them.
+
+**Skip this phase if** `scanners.codex` and `scanners.gemma` are both `false`
+in `config.yaml` (the common case for CI / non-interactive runs).
+
+Otherwise:
+
+1. Resolve the host tool path. Try in order:
+   ```bash
+   # 1) installed via pipx/pip
+   command -v security-scan-llm
+   # 2) bundled with the skill plugin (typical Claude Code layout)
+   PLUGIN_TOOL="${HOME}/.claude/plugins/leverj/tools/security-scan-llm"
+   [ -x "${PLUGIN_TOOL}/.venv/bin/security-scan-llm" ] && echo "${PLUGIN_TOOL}/.venv/bin/security-scan-llm"
+   ```
+   If neither works, surface a one-line install hint:
+   `pipx install ${PLUGIN_TOOL}` and stop the phase (do NOT block the rest of
+   the run — deterministic findings are already filed).
+
+2. For `scanners.gemma: true`, verify Ollama is reachable:
+   ```bash
+   curl -fsS "${GEMMA_BASE_URL:-http://localhost:11434}/api/tags" >/dev/null \
+     || { echo "gemma enabled but Ollama unreachable; skipping LLM lane"; SKIP_LLM=1; }
+   ```
+
+3. For `scanners.codex: true`, verify `codex` is installed and logged in:
+   ```bash
+   command -v codex >/dev/null && codex --help >/dev/null 2>&1 \
+     || { echo "codex enabled but binary missing/broken; skipping LLM lane"; SKIP_LLM=1; }
+   ```
+
+4. Run the LLM lane against the live working tree (no fresh clone — the user
+   already has the repo checked out in their dev environment):
+   ```bash
+   "${TOOL}" \
+     --config "${CONFIG_DIR}/config.yaml" \
+     --repo-dir "${REPO_DIR:-$PWD}" \
+     $([ -z "${NO_DRY_RUN}" ] && echo --dry-run)
+   ```
+
+5. Aggregate the tool's `summary:` line with the container's summary for
+   Phase 5 reporting.
 
 ### Phase 5 — Report
 
