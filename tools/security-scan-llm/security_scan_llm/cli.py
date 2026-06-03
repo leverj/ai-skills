@@ -1,4 +1,4 @@
-"""LLM-only orchestrator: codex + gemma SAST + cross-validate + Projects v2 filer.
+"""LLM-only orchestrator: codex + claude + gemma SAST + cross-validate + Projects v2 filer.
 
 Complement to the deterministic GitHub Action (leverj/security-scanner). The Action
 runs the deterministic lanes (semgrep/gitleaks/trivy/...) inside CI; this runs the
@@ -35,7 +35,7 @@ from security_scan_llm.sync import sync
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="security-scan-llm",
-        description="Run LLM SAST (codex + gemma) and file findings into a GitHub Projects v2 board.",
+        description="Run LLM SAST (codex + claude + gemma) and file findings into a GitHub Projects v2 board.",
     )
     parser.add_argument("--config", required=True, help="Path to config.yaml")
     parser.add_argument(
