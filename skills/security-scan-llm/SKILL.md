@@ -2,7 +2,7 @@
 name: security-scan-llm
 description: >
   Drive the host-side `security-scan-llm` Python CLI for LLM SAST lanes
-  (Codex + Gemma with bidirectional cross-validation). Files findings into the
+  (Codex + Claude + Gemma with lane-agnostic cross-validation). Files findings into the
   same GitHub Projects v2 board as the deterministic `security-scan` skill,
   using a byte-identical fingerprint scheme so findings dedup across substrates.
   Config lives at `<repo>/.security-scan/config-llm.yaml` — repo-local,
@@ -10,9 +10,9 @@ description: >
   `<repo>/.security-scan/config.yaml`. On every run, checks the installed
   tool's `--version` against the bundled `SECURITY-SCAN-LLM-MANIFEST.yaml`
   and offers a user-confirmed upgrade + config-migration flow.
-  Use when the user says "scan llm", "/security-scan-llm", "run codex/gemma
+  Use when the user says "scan llm", "/security-scan-llm", "run codex/claude/gemma
   scan", or "give me a fresh LLM pass on this repo".
-allowed-tools: Bash(security-scan-llm *) Bash(codex *) Bash(curl *) Bash(jq *) Bash(yq *) Bash(gh *) Bash(op *) Bash(ls *) Bash(cat *) Bash(mkdir *) Bash(cp *) Bash(git *) Bash(python3 *) Bash(pipx *) Read Write Edit Glob Grep
+allowed-tools: Bash(security-scan-llm *) Bash(codex *) Bash(claude *) Bash(curl *) Bash(jq *) Bash(yq *) Bash(gh *) Bash(op *) Bash(ls *) Bash(cat *) Bash(mkdir *) Bash(cp *) Bash(git *) Bash(python3 *) Bash(pipx *) Read Write Edit Glob Grep
 argument-hint: "[run|setup|upgrade|check] [--no-dry-run] [--no-update-check]"
 effort: medium
 ---
@@ -188,19 +188,31 @@ Run a non-destructive check before invoking the tool.
 
 2. **PAT**: env var named by `github_token_env` is set + non-empty.
 
-3. **At least one LLM lane enabled**: if both `scanners.codex` and
-   `scanners.gemma` are false, stop with a clear message — the tool will
-   error otherwise.
+3. **At least one LLM lane enabled**: if `scanners.codex`, `scanners.claude`
+   and `scanners.gemma` are all false, stop with a clear message — the tool
+   will error otherwise. (Cross-validation needs **two** lanes; with only one
+   enabled, it's a no-op.)
 
 4. **Codex health** (if `scanners.codex: true`):
    ```bash
    command -v codex >/dev/null || { echo "codex CLI not on PATH"; FAIL=1; }
    codex login status >/dev/null 2>&1 || { echo "codex not logged in — run 'codex login'"; FAIL=1; }
    ```
-   If either fails: surface clearly and ask whether to proceed with gemma
-   only (silently) or stop.
+   If either fails: surface clearly and ask whether to proceed with the other
+   enabled lane(s) (silently) or stop.
 
-5. **Gemma / Ollama health** (if `scanners.gemma: true`):
+5. **Claude health** (if `scanners.claude: true`):
+   ```bash
+   command -v claude >/dev/null || { echo "claude CLI not on PATH"; FAIL=1; }
+   # Subscription auth (no API key). A non-empty oauthAccount in ~/.claude.json
+   # means logged in; an ANTHROPIC_API_KEY in env would route to metered API.
+   ```
+   If `claude` is missing, surface clearly and ask whether to proceed with the
+   other enabled lane(s) or stop. The lane uses the user's Claude Max/Pro
+   subscription — flag that a full audit draws the same usage pool as their
+   interactive Claude Code sessions.
+
+6. **Gemma / Ollama health** (if `scanners.gemma: true`):
    ```bash
    BASE_URL="$(yq '.gemma.base_url' "${CFG}" 2>/dev/null || echo http://localhost:11434)"
    curl -fsS "${BASE_URL%/}/api/tags" >/dev/null \
@@ -210,7 +222,7 @@ Run a non-destructive check before invoking the tool.
    crossing a public boundary is an explicit policy violation. The tool
    itself enforces this; the skill catches it earlier with a clearer message.
 
-6. **Slack health** (if `slack.enabled: true`): env var resolvable.
+7. **Slack health** (if `slack.enabled: true`): env var resolvable.
 
 If any check fails, surface remediation and stop unless the user explicitly
 overrides.
@@ -232,7 +244,7 @@ static skill uses, but expects them in `config-llm.yaml`, not `config.yaml`.
 Surface to the user:
 
 1. The final `summary:` line from stderr.
-2. Per-lane completion (codex / gemma / cross-validate).
+2. Per-lane completion (codex / claude / gemma / cross-validate).
 3. Direct link to the project board:
    `https://github.com/orgs/<project.owner>/projects/<project.number>`.
 4. The dry-run / real-run mode, explicitly stated.
@@ -263,13 +275,19 @@ relative to that.
    - `scanners.codex: true/false` — default false. **Surface:** uses your
      ChatGPT/Codex subscription quota; each run can consume several minutes
      of model time.
+   - `scanners.claude: true/false` — default false. **Surface:** uses your
+     Claude Max/Pro subscription (the local `claude` CLI; no API key). A full
+     audit draws the same usage pool as the user's interactive Claude Code
+     sessions. Offer to pin `claude.model` (e.g. `claude-sonnet-4-6` for a
+     lighter usage footprint than Opus).
    - `scanners.gemma: true/false` — default false. **Surface:** uses your
      local Ollama (must be running); first run can take minutes for the
      model to warm. Source files cross the loopback boundary to Ollama;
-     `gemma.base_url` must be loopback or RFC1918.
-6. **Cross-validate prompt** (only if BOTH lanes enabled): `cross_validate.enabled`
-   — default true. **Surface:** bidirectional review reduces false positives
-   but doubles LLM call cost.
+     `gemma.base_url` must be loopback or RFC1918. Heavy on small hosts —
+     a 26B model needs a box with headroom well above its weight.
+6. **Cross-validate prompt** (only if ≥2 lanes enabled): `cross_validate.enabled`
+   — default true. **Surface:** each finding is reviewed by a different
+   enabled lane; reduces false positives but adds an LLM call per finding.
 7. **Triage prompt:** `triage.enabled: true/false` — default false.
    - If true, sub-prompts: `intro_enabled` (default true, cheap),
      `prose_enabled` (default false, 1 call per finding), `fuzzy_dup_enabled`
@@ -290,7 +308,7 @@ These are non-negotiable.
   current turn.** Same rule as the static skill — LLM findings file real
   issues onto the user's board.
 - **NEVER include secrets in your replies.** PATs, Slack webhooks, Ollama
-  tokens, codex session tokens must never appear in your messages.
+  tokens, codex / claude session tokens must never appear in your messages.
 - **NEVER edit `config-llm.yaml` silently.** Every change MUST be shown as a
   diff and confirmed before writing.
 - **NEVER `pipx install` or `pip upgrade` the tool for the user.** Surface
@@ -298,8 +316,9 @@ These are non-negotiable.
 - **Refuse non-loopback `gemma.base_url`.** Source content over a public
   boundary is a policy violation. The tool refuses too; the skill catches it
   earlier with a clearer message.
-- **Refuse to run with both `scanners.codex: false` and `scanners.gemma:
-  false`.** Stop at Phase 3; tell the user to enable at least one lane.
+- **Refuse to run with every lane off** (`scanners.codex`, `scanners.claude`
+  and `scanners.gemma` all false). Stop at Phase 3; tell the user to enable
+  at least one lane (two for cross-validation to do anything).
 - **The Projects v2 board is the source of triage truth.** Don't try to
   dedup findings yourself; that's the tool's job (deterministic
   fingerprints in the issue body, byte-identical to the static lane's).
@@ -326,6 +345,8 @@ lockfile); leaving it out lets each developer track their own install.
 | `binary not found: security-scan-llm` | tool not installed on this host | `pipx install <ai-skills-clone>/tools/security-scan-llm` |
 | `codex CLI not on PATH` | codex isn't installed | install codex CLI; run `codex login` |
 | `codex not logged in` | session expired | `codex login` |
+| `claude CLI not on PATH` | claude CLI isn't installed | install Claude Code; run `claude` once to log in (subscription) |
+| `claude` lane bills the API instead of the subscription | `ANTHROPIC_API_KEY` set in env | unset it so `claude` uses the OAuth subscription session |
 | `Ollama unreachable at http://localhost:11434` | Ollama not running | start Ollama daemon |
 | `Refusing to send source to non-local Ollama` | `gemma.base_url` is a public host | set to `http://localhost:11434` |
 | `SOCKET_API_KEY env unset` | (this is the static lane's job, not this skill's) | this skill doesn't use Socket; see `/leverj:security-scan` |
