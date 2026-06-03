@@ -195,6 +195,13 @@ def _from_dict(raw: dict) -> Config:
         prose_enabled=bool(triage_raw.get("prose_enabled", False)),
         fuzzy_dup_enabled=bool(triage_raw.get("fuzzy_dup_enabled", False)),
     )
+    # Same loopback policy as ollama lanes: triage must not send snippets to a
+    # remote Ollama. Enforced at load time when triage is on (not just runtime).
+    if triage_cfg.enabled and not is_local_url(triage_cfg.base_url):
+        raise ConfigError(
+            f"config: triage.base_url {triage_cfg.base_url!r} is not loopback/RFC1918 — "
+            "triage must not send content to a remote Ollama"
+        )
 
     slack_raw = raw.get("slack") or {}
     slack = SlackConfig(

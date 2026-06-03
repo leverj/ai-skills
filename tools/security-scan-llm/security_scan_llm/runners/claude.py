@@ -15,12 +15,13 @@ existing normalize.py pipeline consumes it like any other scanner.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
 
-from . import RunnerResult
+from security_scan_llm.redact import redact_text
+
+from . import RunnerResult, agent_env
 from .codex import _PROMPT, _SCHEMA, _to_sarif
 
 # Read-only toolset the agent is allowed to use during the audit. No Bash/Edit/
@@ -72,7 +73,7 @@ def run(
             text=True,
             timeout=timeout,
             check=False,
-            env={**os.environ},
+            env=agent_env(),
         )
     except subprocess.TimeoutExpired:
         return RunnerResult(scanner, None, False, f"timeout after {timeout}s")
@@ -82,7 +83,7 @@ def run(
         return RunnerResult(scanner, None, False, f"{type(e).__name__}: {e}")
 
     if r.returncode != 0:
-        err = (r.stderr or r.stdout or "").strip()
+        err = redact_text((r.stderr or r.stdout or "").strip())
         return RunnerResult(scanner, None, False, f"exit {r.returncode}: {err[:300]}")
 
     try:

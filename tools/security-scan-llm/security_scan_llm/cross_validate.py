@@ -32,7 +32,6 @@ user's subscription rather than a metered API.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -44,6 +43,7 @@ import requests
 from security_scan_llm.config import LaneConfig
 from security_scan_llm.models import SEVERITY_ORDER, Finding
 from security_scan_llm.redact import is_local_url, redact_text
+from security_scan_llm.runners import agent_env
 
 # Severity downgrade ladder. Critical is intentionally NOT downgraded — the
 # asymmetry is deliberate (worst case for FP-on-critical is one extra issue
@@ -242,7 +242,7 @@ def _codex_verdict(
         try:
             r = subprocess.run(
                 cmd, cwd=str(repo_dir), capture_output=True, text=True,
-                timeout=timeout, check=False, env={**os.environ},
+                timeout=timeout, check=False, env=agent_env(),
             )
         except subprocess.TimeoutExpired:
             return ("uncertain", "validator timeout")
@@ -285,7 +285,7 @@ def _claude_verdict(
     try:
         r = subprocess.run(
             cmd, cwd=str(repo_dir), input=prompt, capture_output=True, text=True,
-            timeout=timeout, check=False, env={**os.environ},
+            timeout=timeout, check=False, env=agent_env(),
         )
     except subprocess.TimeoutExpired:
         return ("uncertain", "validator timeout")

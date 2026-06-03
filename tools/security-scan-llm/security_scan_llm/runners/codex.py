@@ -12,13 +12,14 @@ pipeline can consume it like any other scanner.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
-from . import RunnerResult
+from security_scan_llm.redact import redact_text
+
+from . import RunnerResult, agent_env
 
 # Map our severity vocabulary to a numeric security-severity used by the SARIF
 # normalizer (it expects CVSS-style numerics under properties.security-severity).
@@ -166,10 +167,9 @@ def run(
                 text=True,
                 timeout=timeout,
                 check=False,
-                # Don't inherit security_scan's env wholesale — keep CODEX_HOME etc., but
-                # strip anything that might confuse the agent. Codex reads its own
-                # config from ~/.codex/.
-                env={**os.environ},
+                # Strip the GitHub PAT from the agent's env (it only needs its own
+                # ~/.codex auth). Codex reads its config from ~/.codex/.
+                env=agent_env(),
             )
         except subprocess.TimeoutExpired:
             return RunnerResult(scanner, None, False, f"timeout after {timeout}s")
@@ -179,7 +179,7 @@ def run(
             return RunnerResult(scanner, None, False, f"{type(e).__name__}: {e}")
 
         if r.returncode != 0:
-            err = (r.stderr or r.stdout or "").strip()
+            err = redact_text((r.stderr or r.stdout or "").strip())
             # Detect auth failure (most common user-actionable error) and surface clearly.
             if "not logged in" in err.lower() or "auth" in err.lower():
                 return RunnerResult(

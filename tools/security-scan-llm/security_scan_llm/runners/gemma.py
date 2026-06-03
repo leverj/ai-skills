@@ -142,7 +142,7 @@ def run(
         return RunnerResult(scanner, None, False, f"ollama unreachable: {e}")
 
     if r.status_code >= 400:
-        return RunnerResult(scanner, None, False, f"ollama http {r.status_code}: {r.text[:200]}")
+        return RunnerResult(scanner, None, False, f"ollama http {r.status_code}: {redact_text(r.text[:200])}")
 
     try:
         body = r.json() or {}
