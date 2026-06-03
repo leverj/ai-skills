@@ -39,19 +39,21 @@ _SEVERITY_TO_LEVEL = {
     "info":     "note",
 }
 
-# JSON schema for codex's structured output. The schema is strict by design —
-# extra fields are allowed (Codex sometimes adds them) but the required ones must be present.
+# JSON schema for codex's structured output. OpenAI strict structured-output
+# (response_format json_schema) rejects the request unless every object sets
+# additionalProperties:false AND lists every property key in `required` —
+# optional fields are expressed as nullable types, not as omitted-from-required.
 _SCHEMA: dict = {
     "type": "object",
-    "additionalProperties": True,
+    "additionalProperties": False,
     "required": ["findings"],
     "properties": {
         "findings": {
             "type": "array",
             "items": {
                 "type": "object",
-                "additionalProperties": True,
-                "required": ["file", "rule_id", "severity", "title", "message"],
+                "additionalProperties": False,
+                "required": ["file", "line", "rule_id", "severity", "title", "message", "snippet"],
                 "properties": {
                     "file":     {"type": "string"},
                     "line":     {"type": ["integer", "null"]},
