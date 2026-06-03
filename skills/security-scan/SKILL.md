@@ -1,33 +1,43 @@
 ---
 name: security-scan
 description: >
-  Run the security-scan suite against a repo. The deterministic lanes
-  (OSV-Scanner, Gitleaks, Semgrep, Trivy, Trufflehog, image-CVE, Supabase live)
-  run inside the published `leverj/security-scan` Docker image. The optional
-  LLM lanes (Codex + Gemma SAST with bidirectional cross-validation) run
-  host-side via the `security-scan-llm` companion tool bundled in this plugin
-  (see `tools/security-scan-llm/`). Both substrates file into the same GitHub
-  Projects v2 board with a byte-identical fingerprint scheme. On every run,
-  checks Docker Hub for a newer image DIGEST and — on user confirmation —
-  pulls it and applies any new config-schema migrations declared in the
-  image's SECURITY-SCAN-MANIFEST.yaml.
+  Drive the deterministic `leverj/security-scan` Docker image against the
+  current repo (OSV-Scanner, Gitleaks, Semgrep, Trivy, Trufflehog, image-CVE,
+  Supabase live). Files findings into a GitHub Projects v2 board. On every
+  run, checks Docker Hub for a newer image DIGEST and — on user confirmation
+  — pulls it and applies any new config-schema migrations declared in the
+  image's SECURITY-SCAN-MANIFEST.yaml. Config lives at
+  `<repo>/.security-scan/config.yaml` — repo-local, versioned with the repo.
+  LLM SAST (codex + gemma) is a SEPARATE concern handled by the
+  `security-scan-llm` CLI under `tools/security-scan-llm/` — not orchestrated
+  by this skill.
   Use when the user says "scan", "/security-scan", "run security-scan",
   "scan this repo for security issues", "check for secrets / CVEs / SAST
   issues", or "audit dependencies".
 allowed-tools: Bash(docker *) Bash(curl *) Bash(jq *) Bash(yq *) Bash(gh *) Bash(op *) Bash(ls *) Bash(cat *) Bash(mkdir *) Bash(cp *) Read Write Edit Glob Grep
-argument-hint: "[run|setup|upgrade|check] [--config-dir <path>] [--no-dry-run] [--no-update-check]"
+argument-hint: "[run|setup|upgrade|check] [--no-dry-run] [--no-update-check]"
 effort: medium
 ---
 
 # security-scan — Security Scanner skill
 
-Drives the `leverj/security-scan` Docker image. The image is stateless; all
-per-deployment state lives in a **config directory** (defaults to
-`~/.security-scan/`) and in a **GitHub Projects v2 board** the user owns.
-Between runs the skill keeps two small files in the user's config dir:
+Drives the `leverj/security-scan` Docker image (deterministic scanners only).
+The image is stateless; all per-deployment state lives in a **repo-local
+config directory** at `<repo>/.security-scan/` and in a **GitHub Projects v2
+board** the user owns. Between runs the skill keeps two small files in the
+repo's config dir:
 
 - `config.yaml`                — the live config (the unit of configuration).
 - `.security-scan-state.yaml`  — managed by the skill; tracks the pinned image **digest**.
+
+Both files are versioned with the repo — config travels with the repo. No
+user-level (`~/.security-scan/`) state.
+
+LLM SAST (codex + gemma) is **out of scope** for this skill. It lives in a
+standalone CLI (`security-scan-llm`) under `tools/security-scan-llm/` with
+its own config at `<repo>/.security-scan/config-llm.yaml`. Both tools file
+into the same Projects v2 board with a byte-identical fingerprint scheme so
+findings dedup across substrates.
 
 This skill never writes inside the image. It only:
 
@@ -67,9 +77,12 @@ The `version` field inside the manifest is a human-readable label
 
 Flags accepted on every subcommand:
 
-- `--config-dir <path>` — use a non-default config dir (default `~/.security-scan`).
-- `--no-update-check`   — skip the pre-run Docker Hub digest check (faster; offline-OK).
-- `--image <ref>`       — override `leverj/security-scan` (e.g., for a fork).
+- `--no-update-check`  — skip the pre-run Docker Hub digest check (faster; offline-OK).
+- `--image <ref>`      — override `leverj/security-scan` (e.g., for a fork).
+
+The skill always operates against the current working directory's
+`.security-scan/` subdirectory. There is no `--config-dir` flag — to scan a
+different repo, `cd` into that repo and re-invoke.
 
 ## Phase-by-phase operating procedure
 
@@ -78,15 +91,16 @@ message to the user.
 
 ### Phase 0 — Locate config dir
 
-Resolve in priority order:
-1. `--config-dir <path>` flag if passed.
-2. `SECURITY_SCAN_CONFIG_DIR` env var.
-3. `~/.security-scan/`.
+The config dir is **always** `${REPO_ROOT}/.security-scan/`, where
+`REPO_ROOT` is the output of `git rev-parse --show-toplevel`.
 
-If the chosen directory doesn't contain `config.yaml`:
+If that fails (current dir isn't inside a git repo), stop with a clear
+message — the skill only operates inside a git checkout.
+
+If `${REPO_ROOT}/.security-scan/config.yaml` doesn't exist:
 - For subcommand `setup`: proceed to interactive setup (Phase A below).
 - For everything else: stop and tell the user to run
-  `/leverj:security-scan setup`.
+  `/leverj:security-scan setup` from inside this repo.
 
 ### Phase 1 — Resolve pinned image digest
 
@@ -232,7 +246,7 @@ push from the publisher.
 
 ```bash
 docker run --rm \
-  -v "${CONFIG_DIR}:/config:ro" \
+  -v "${REPO_ROOT}/.security-scan:/config:ro" \
   -e GITHUB_TOKEN \
   $([ "${SLACK_FORWARDED}" ] && echo -e SLACK_WEBHOOK_URL) \
   $([ "${SUPABASE_FORWARDED}" ] && echo -e SUPABASE_DB_URL) \
@@ -243,70 +257,12 @@ docker run --rm \
 For `secrets.source: 1password`, wrap the above with:
 
 ```bash
-op run --env-file="${CONFIG_DIR}/${ENV_FILE}" -- \
+op run --env-file="${REPO_ROOT}/.security-scan/${ENV_FILE}" -- \
   docker run --rm ... (same as above)
 ```
 
 `op` populates this shell's env JIT; `docker run -e GITHUB_TOKEN` (no value!)
 copies it into the container without putting it on argv.
-
-### Phase 4b — LLM lane (host-side, optional)
-
-The Docker image runs **deterministic scanners only** (osv, gitleaks, semgrep,
-trivy, trufflehog, supabase, image-scan). The LLM lanes — `codex` and `gemma`
-SAST + bidirectional cross-validation — run from the **host**, not the
-container, because:
-
-- `codex` is a host-side CLI subprocess tied to the user's ChatGPT/Codex
-  subscription. The container doesn't ship the `codex` binary and can't reach
-  the user's login session.
-- `gemma` talks to Ollama, which lives on the host (default `localhost:11434`).
-  Source content never crosses the loopback boundary.
-
-Both substrates file into the **same Projects v2 board** with the **same
-fingerprint scheme**, so findings dedup across runs regardless of which
-substrate produced them.
-
-**Skip this phase if** `scanners.codex` and `scanners.gemma` are both `false`
-in `config.yaml` (the common case for CI / non-interactive runs).
-
-Otherwise:
-
-1. Resolve the host tool path. Try in order:
-   ```bash
-   # 1) installed via pipx/pip
-   command -v security-scan-llm
-   # 2) bundled with the skill plugin (typical Claude Code layout)
-   PLUGIN_TOOL="${HOME}/.claude/plugins/leverj/tools/security-scan-llm"
-   [ -x "${PLUGIN_TOOL}/.venv/bin/security-scan-llm" ] && echo "${PLUGIN_TOOL}/.venv/bin/security-scan-llm"
-   ```
-   If neither works, surface a one-line install hint:
-   `pipx install ${PLUGIN_TOOL}` and stop the phase (do NOT block the rest of
-   the run — deterministic findings are already filed).
-
-2. For `scanners.gemma: true`, verify Ollama is reachable:
-   ```bash
-   curl -fsS "${GEMMA_BASE_URL:-http://localhost:11434}/api/tags" >/dev/null \
-     || { echo "gemma enabled but Ollama unreachable; skipping LLM lane"; SKIP_LLM=1; }
-   ```
-
-3. For `scanners.codex: true`, verify `codex` is installed and logged in:
-   ```bash
-   command -v codex >/dev/null && codex --help >/dev/null 2>&1 \
-     || { echo "codex enabled but binary missing/broken; skipping LLM lane"; SKIP_LLM=1; }
-   ```
-
-4. Run the LLM lane against the live working tree (no fresh clone — the user
-   already has the repo checked out in their dev environment):
-   ```bash
-   "${TOOL}" \
-     --config "${CONFIG_DIR}/config.yaml" \
-     --repo-dir "${REPO_DIR:-$PWD}" \
-     $([ -z "${NO_DRY_RUN}" ] && echo --dry-run)
-   ```
-
-5. Aggregate the tool's `summary:` line with the container's summary for
-   Phase 5 reporting.
 
 ### Phase 5 — Report
 
@@ -329,23 +285,26 @@ lines. Quote relevant excerpts only.
 
 Triggered by `/leverj:security-scan setup` or when Phase 0 finds no config.
 
-1. `mkdir -p ~/.security-scan`.
+Resolve `REPO_ROOT=$(git rev-parse --show-toplevel)`. All paths below are
+relative to that.
+
+1. `mkdir -p "${REPO_ROOT}/.security-scan"`.
 2. Fetch the current `:latest` digest (Phase 2 logic).
 3. Pull by digest: `docker pull leverj/security-scan@${LATEST_DIGEST}`.
 4. Read the image's manifest with
    `docker run --rm --entrypoint cat leverj/security-scan@${LATEST_DIGEST} /app/SECURITY-SCAN-MANIFEST.yaml`.
 5. Use the manifest's `config.new_fields` (where `required: true`) as the
    prompt schema. Ask the user for each required value:
-   - `repo` (e.g., `leverj/ezel`)
+   - `repo` (e.g., `leverj/ezel`) — default: parse from `git remote get-url origin`
    - `ref` (default `main`)
    - `project.owner` (org or user)
    - `project.number` (project number from the URL)
 6. Ask which secret path: env (default) or 1password. If 1password, also ask
    for the env file path.
-7. Write `~/.security-scan/config.yaml` with the required fields filled in
-   and the optional ones at their documented defaults.
+7. Write `${REPO_ROOT}/.security-scan/config.yaml` with the required fields
+   filled in and the optional ones at their documented defaults.
 8. If `secrets.source: 1password`, copy the image-baked example to
-   `~/.security-scan/.env.1password.tpl` and tell the user to edit it with
+   `${REPO_ROOT}/.security-scan/.env.1password.tpl` and tell the user to edit it with
    their `op://vault/item/...` paths. Get the template contents with:
    ```bash
    docker run --rm --entrypoint cat \
@@ -356,14 +315,17 @@ Triggered by `/leverj:security-scan setup` or when Phase 0 finds no config.
      defaults off; surface the security implications if they say yes).
    - `supabase.enabled` (live Supabase Postgres advisor — requires a
      read-only DB role; surface the recommended `CREATE ROLE` + `GRANT`).
-   - `scanners.codex` / `scanners.gemma` (LLM-driven SAST; explain costs).
-   These are all defaulted off in the manifest's `new_fields`.
+   These are defaulted off in the manifest's `new_fields`.
 10. Tell the user the PAT scopes required (`repo` + `project`) and where to
     create one.
 11. Write `.security-scan-state.yaml` with the resolved `pinned_digest` and
     `version_label` from the manifest.
 12. Run Phase 3 (verify) to confirm everything's wired.
 13. Run a dry-run (Phase 4 with `--dry-run`) and report (Phase 5).
+14. Add `.security-scan/` (or specifically `.security-scan/.security-scan-state.yaml`)
+    to `.gitignore` if the user prefers state to be local-only. By default the
+    state file IS checked in — it pins the image digest, which is a meaningful
+    repo-level decision (analogous to a lockfile).
 
 ## Hard rules
 

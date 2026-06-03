@@ -108,9 +108,9 @@ def run(
             print("scan: gemma", file=sys.stderr)
             r = gemma_runner.run(
                 target,
-                base_url=(cfg.gemma.base_url or cfg.triage.base_url),
-                model=(cfg.gemma.model or cfg.triage.model),
-                keep_alive=(cfg.gemma.keep_alive or cfg.triage.keep_alive),
+                base_url=cfg.gemma.base_url,
+                model=cfg.gemma.model,
+                keep_alive=cfg.gemma.keep_alive,
                 timeout=cfg.gemma.timeout,
                 max_files=cfg.gemma.max_files,
                 max_file_bytes=cfg.gemma.max_file_bytes,
@@ -130,9 +130,9 @@ def run(
                 codex_binary=cfg.codex.binary,
                 codex_model=cfg.codex.model,
                 codex_timeout=cfg.cross_validate.codex_timeout,
-                ollama_url=(cfg.gemma.base_url or cfg.triage.base_url),
-                gemma_model=(cfg.gemma.model or cfg.triage.model),
-                gemma_keep_alive=(cfg.gemma.keep_alive or cfg.triage.keep_alive),
+                ollama_url=cfg.gemma.base_url,
+                gemma_model=cfg.gemma.model,
+                gemma_keep_alive=cfg.gemma.keep_alive,
                 gemma_timeout=cfg.cross_validate.gemma_timeout,
             )
 

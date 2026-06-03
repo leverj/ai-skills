@@ -1,63 +1,100 @@
 # security-scan-llm
 
-Host-side LLM SAST lanes for the leverj security-scan pipeline. Complement to
-the deterministic GitHub Action / Docker image (`leverj/security-scan`).
+Host-side LLM SAST lanes (codex + gemma + bidirectional cross-validation)
+for the leverj security-scan pipeline.
 
-## Why this lives here, not in the container
+**Standalone CLI** — not orchestrated by the `security-scan` Claude Code
+skill. The skill drives the deterministic container; this tool drives the
+LLM lanes from the host. Both file into the **same** GitHub Projects v2
+board with a **byte-identical** fingerprint scheme, so findings dedup
+across substrates.
 
-- **`codex`** is a host-side CLI bound to the user's ChatGPT/Codex subscription.
-  The container has no `codex` binary and no path to the user's session.
-- **`gemma`** talks to Ollama on the host (default `localhost:11434`). Source
-  content never crosses the loopback boundary.
+## Why this lives on the host (not in the container)
 
-Both substrates — this tool and the deterministic container — file into the
-**same** GitHub Projects v2 board with a **byte-identical** fingerprint, so
-findings dedup across runs regardless of which substrate produced them.
+- **`codex`** is a host-side CLI bound to the user's ChatGPT/Codex
+  subscription. The container has no `codex` binary and no path to the
+  user's session.
+- **`gemma`** talks to Ollama on the host (default `localhost:11434`).
+  Source content never crosses the loopback boundary.
+
+Making the LLM lanes a host concern keeps the container CI-friendly and the
+LLM tool desktop-friendly. Each tool owns its own contract; neither pretends
+to support things it can't actually do.
 
 ## Install
 
 ```bash
 # from a clone of leverj/ai-skills
 pipx install ./tools/security-scan-llm
-# or, scoped to the skill plugin layout used by Claude Code
+# or scoped to the plugin's bundled checkout (typical Claude Code layout)
 python3 -m venv ./tools/security-scan-llm/.venv
 ./tools/security-scan-llm/.venv/bin/pip install -e ./tools/security-scan-llm
 ```
 
-Both produce a `security-scan-llm` CLI.
+Both produce a `security-scan-llm` CLI on PATH.
+
+## Configure
+
+Config lives at `<repo>/.security-scan/config-llm.yaml` — **repo-local**,
+versioned with the repo. Independent from the container's
+`<repo>/.security-scan/config.yaml` (no shared file; no `~/.security-scan/`).
+
+Minimal `config-llm.yaml`:
+
+```yaml
+repo: "leverj/your-repo"
+ref:  "main"
+project:
+  owner:  "leverj"
+  number: 7
+github_token_env: "GITHUB_TOKEN"   # PAT with repo + project scopes
+
+scanners:
+  codex: true        # opt-in
+  gemma: true        # opt-in
+
+# Optional tunables (defaults shown — omit any you're happy with)
+gemma:
+  base_url: "http://localhost:11434"   # MUST be loopback or RFC1918
+  model:    "gemma4:26b"
+codex:
+  binary: "codex"
+cross_validate:
+  enabled: true       # bidirectional review (only when both lanes on)
+triage:
+  enabled: false      # gemma-driven issue prose / slack intro / fuzzy-dedup
+```
+
+Full schema: see [SECURITY-SCAN-LLM-MANIFEST.yaml](./SECURITY-SCAN-LLM-MANIFEST.yaml).
 
 ## Run
 
 ```bash
+export GITHUB_TOKEN="ghp_..."   # PAT with repo + project scopes
+cd <your-repo>
 security-scan-llm \
-  --config ~/.security-scan/config.yaml \
-  --repo-dir .       \   # scan the working tree (no clone)
-  --dry-run              # remove to actually file
+  --config ./.security-scan/config-llm.yaml \
+  --repo-dir .     \   # scan the working tree, no clone
+  --dry-run            # remove to actually file findings
 ```
 
-The tool reads the same `config.yaml` the Docker image consumes. It looks at
-`scanners.codex`, `scanners.gemma`, `cross_validate.*`, `triage.*`, `gemma.*`,
-`codex.*`, and the standard `project.*` / `github_token_env` block. Other
-deterministic-scanner fields are ignored (set by the container).
+Failure modes:
 
-## Lanes
-
-| Lane | Source | Requires |
-|---|---|---|
-| codex SAST | `runners/codex.py` | `codex` CLI on PATH, logged in |
-| gemma SAST | `runners/gemma.py` | Ollama reachable at `gemma.base_url` |
-| Cross-validate (both enabled) | `cross_validate.py` | both lanes successful |
-| Triage prose / fuzzy-dup / slack intro | `triage.py` | Ollama reachable |
-| Filing | `github.py` | PAT with `project` + `repo` scopes |
+| Cause | Behavior |
+|---|---|
+| `codex` binary missing / not logged in | That lane returns `completed=False`; the other lane continues. |
+| Ollama unreachable at `gemma.base_url` | That lane returns `completed=False`. |
+| `scanners.codex` AND `scanners.gemma` both false | Exit 2 with a clear error — nothing to do. |
+| GitHub PAT missing `project` scope | Exit 4 with the GitHub API error. |
+| All enabled lanes failed | Exit 3. |
 
 ## What this does NOT do
 
-- No semgrep, gitleaks, trivy, osv, trufflehog, image-scan, supabase. Those
-  live in the container (today) and the GitHub Action (planned).
-- No stack detection — the LLM lanes are language-agnostic; the tool walks
-  source files filtered by extension.
-
-## Integration with the skill
-
-The `security-scan` skill invokes this tool in Phase 4b after the deterministic
-container exits when `scanners.codex` or `scanners.gemma` is true.
+- No semgrep, gitleaks, trivy, osv, trufflehog, image-scan, supabase.
+  Those live in the container (`leverj/security-scan`) and the upcoming
+  GitHub Action / current CircleCI flow.
+- No stack detection. The LLM lanes are language-agnostic and walk source
+  files by extension.
+- No interactive setup. Edit `config-llm.yaml` directly. (The
+  `security-scan` skill scaffolds the sibling `config.yaml` for you; this
+  tool intentionally stays a thin CLI.)
