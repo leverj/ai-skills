@@ -182,7 +182,7 @@ def run(
 
 def _absorb(r: RunnerResult, findings: list[Finding], completed: list[str], failed: list[tuple[str, str]]) -> None:
     if r.completed and r.sarif:
-        norm = normalize_sarif(r.scanner, r.sarif)
+        norm = normalize_sarif(r.sarif, r.scanner)
         findings.extend(norm)
         completed.append(r.scanner)
         print(f"  -> {r.scanner}: {len(norm)} finding(s)", file=sys.stderr)
