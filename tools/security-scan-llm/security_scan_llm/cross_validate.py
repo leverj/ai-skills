@@ -41,6 +41,7 @@ from pathlib import Path
 
 import requests
 
+from security_scan_llm.config import LaneConfig
 from security_scan_llm.models import SEVERITY_ORDER, Finding
 from security_scan_llm.redact import is_local_url, redact_text
 
@@ -94,63 +95,52 @@ def cross_validate(
     findings: list[Finding],
     *,
     repo_dir: Path,
-    codex_enabled: bool = False,
-    claude_enabled: bool = False,
-    gemma_enabled: bool = False,
-    codex_binary: str = "codex",
-    codex_model: str | None = None,
-    codex_timeout: int = 300,
-    claude_binary: str = "claude",
-    claude_model: str | None = None,
-    claude_timeout: int = 300,
-    ollama_url: str = "http://host.docker.internal:11434",
-    gemma_model: str = "gemma4:26b",
-    gemma_keep_alive: str = "5m",
-    gemma_timeout: int = 180,
+    lanes: list[LaneConfig],
 ) -> list[Finding]:
     """Mutate `findings` in place with a `cross_validation` extra and possibly
     a downgraded severity. Returns the same list for convenience.
 
-    Needs at least two reachable validators — with one lane there is nothing to
-    compare against. A finding is validated by the first available lane whose
-    name differs from its own scanner. Lanes that are enabled but unreachable
-    at validation time are silently dropped from the registry.
+    Needs at least two reachable validator lanes — with one lane there is
+    nothing to compare against. Each finding is validated by the first lane (in
+    `lanes` order) whose name differs from its own scanner. Lanes that are
+    unreachable at validation time (missing CLI, Ollama down) are silently
+    dropped from the registry.
     """
-    # Registry of reachable validators: scanner-name -> fn(finding)->(verdict,reason).
+    # Registry of reachable validators: lane-name -> fn(finding)->(verdict,reason).
+    # `L=lane` default-binds each lane into its lambda (avoids loop late-binding).
     validators = {}
-
-    if codex_enabled and shutil.which(codex_binary) is not None:
-        validators["codex"] = lambda f: _codex_verdict(
-            f, repo_dir=repo_dir, binary=codex_binary,
-            model=codex_model, timeout=codex_timeout,
-        )
-    if claude_enabled and shutil.which(claude_binary) is not None:
-        validators["claude"] = lambda f: _claude_verdict(
-            f, repo_dir=repo_dir, binary=claude_binary,
-            model=claude_model, timeout=claude_timeout,
-        )
-    if gemma_enabled:
-        # Defence-in-depth: even though redact_text scrubs known-token shapes
-        # from snippets, refuse the Gemma direction if base_url isn't local.
-        # Cross-validation pays out at the margin; a remote round-trip of
-        # source does not.
-        if not is_local_url(ollama_url):
-            print(
-                f"cross-validate: gemma validator skipped — ollama_url {ollama_url!r} "
-                "is not loopback/private",
-                file=sys.stderr,
+    for lane in lanes:
+        if lane.backend == "codex-cli" and shutil.which(lane.binary or "codex") is not None:
+            validators[lane.name] = lambda f, L=lane: _codex_verdict(
+                f, repo_dir=repo_dir, binary=L.binary or "codex",
+                model=L.model, timeout=L.validate_timeout,
             )
-        elif _ping_ollama(ollama_url):
-            validators["gemma"] = lambda f: _gemma_verdict(
-                f, repo_dir=repo_dir, url=ollama_url, model=gemma_model,
-                keep_alive=gemma_keep_alive, timeout=gemma_timeout,
+        elif lane.backend == "claude-cli" and shutil.which(lane.binary or "claude") is not None:
+            validators[lane.name] = lambda f, L=lane: _claude_verdict(
+                f, repo_dir=repo_dir, binary=L.binary or "claude",
+                model=L.model, timeout=L.validate_timeout,
             )
+        elif lane.backend == "ollama":
+            # Defence-in-depth: refuse the Ollama direction if base_url isn't
+            # local, even though snippets are redacted. Cross-validation pays
+            # out at the margin; a remote round-trip of source does not.
+            if not is_local_url(lane.base_url):
+                print(
+                    f"cross-validate: lane {lane.name!r} skipped — base_url "
+                    f"{lane.base_url!r} is not loopback/private",
+                    file=sys.stderr,
+                )
+            elif _ping_ollama(lane.base_url):
+                validators[lane.name] = lambda f, L=lane: _gemma_verdict(
+                    f, repo_dir=repo_dir, url=L.base_url, model=L.model or "gemma4:26b",
+                    keep_alive=L.keep_alive, timeout=L.validate_timeout,
+                )
 
     if len(validators) < 2:
         return findings
 
-    # Deterministic preference when more than one other lane could validate.
-    order = [name for name in ("codex", "claude", "gemma") if name in validators]
+    # Deterministic preference (lanes order) when more than one lane could validate.
+    order = [lane.name for lane in lanes if lane.name in validators]
     for f in findings:
         validator = next((name for name in order if name != f.scanner), None)
         if validator is None:

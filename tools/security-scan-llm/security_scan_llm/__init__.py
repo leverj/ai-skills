@@ -5,4 +5,4 @@ substrates file into the same Projects v2 board; fingerprint scheme is shared so
 findings dedup across substrates.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

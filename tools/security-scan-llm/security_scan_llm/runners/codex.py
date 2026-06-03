@@ -113,12 +113,16 @@ Return ONLY the JSON object matching the supplied schema. No prose, no preamble.
 
 def run(
     repo_dir: Path,
+    scanner: str = "codex",
     binary: str = "codex",
     model: str | None = None,
     timeout: int = 1200,
     extra_args: list[str] | None = None,
 ) -> RunnerResult:
     """Invoke codex on `repo_dir` and return its findings as a SARIF doc.
+
+    `scanner` is the lane name — it labels the RunnerResult and namespaces
+    rule ids (so a lane named `audit` files `audit.*`).
 
     Failure modes (all return completed=False with a clear error string):
       - binary missing on PATH
@@ -131,7 +135,7 @@ def run(
     modify the cloned repo, and `--ephemeral` so no session metadata persists.
     """
     if shutil.which(binary) is None:
-        return RunnerResult("codex", None, False, f"binary not found: {binary}")
+        return RunnerResult(scanner, None, False, f"binary not found: {binary}")
 
     with tempfile.TemporaryDirectory(prefix="codex-security_scan-") as td:
         schema_path = Path(td) / "schema.json"
@@ -168,21 +172,21 @@ def run(
                 env={**os.environ},
             )
         except subprocess.TimeoutExpired:
-            return RunnerResult("codex", None, False, f"timeout after {timeout}s")
+            return RunnerResult(scanner, None, False, f"timeout after {timeout}s")
         except FileNotFoundError:
-            return RunnerResult("codex", None, False, f"binary not found: {binary}")
+            return RunnerResult(scanner, None, False, f"binary not found: {binary}")
         except Exception as e:
-            return RunnerResult("codex", None, False, f"{type(e).__name__}: {e}")
+            return RunnerResult(scanner, None, False, f"{type(e).__name__}: {e}")
 
         if r.returncode != 0:
             err = (r.stderr or r.stdout or "").strip()
             # Detect auth failure (most common user-actionable error) and surface clearly.
             if "not logged in" in err.lower() or "auth" in err.lower():
                 return RunnerResult(
-                    "codex", None, False,
+                    scanner, None, False,
                     "codex auth failed — run `codex login` first",
                 )
-            return RunnerResult("codex", None, False, f"exit {r.returncode}: {err[:300]}")
+            return RunnerResult(scanner, None, False, f"exit {r.returncode}: {err[:300]}")
 
         if not output_path.is_file():
             return RunnerResult(
@@ -193,14 +197,14 @@ def run(
         try:
             data = json.loads(output_path.read_text() or "{}")
         except json.JSONDecodeError as e:
-            return RunnerResult("codex", None, False, f"output parse error: {e}")
+            return RunnerResult(scanner, None, False, f"output parse error: {e}")
 
     findings = data.get("findings") or []
     if not isinstance(findings, list):
-        return RunnerResult("codex", None, False, "output schema mismatch: 'findings' not a list")
+        return RunnerResult(scanner, None, False, "output schema mismatch: 'findings' not a list")
 
-    sarif = _to_sarif(findings)
-    return RunnerResult("codex", sarif, True, None)
+    sarif = _to_sarif(findings, scanner)
+    return RunnerResult(scanner, sarif, True, None)
 
 
 def _to_sarif(findings: list[dict], scanner: str = "codex") -> dict:

@@ -42,9 +42,9 @@ def normalize_sarif(sarif: dict, scanner: str, exclude: list[str] | None = None)
     if scanner == "syft":
         return []
 
-    if scanner not in _CATEGORY:
-        raise ValueError(f"unknown scanner: {scanner!r}")
-    category = _CATEGORY[scanner]
+    # Custom LLM lane names (any `lanes:` entry) default to the SAST category;
+    # the fixed deterministic scanners keep their specific category.
+    category = _CATEGORY.get(scanner, "sast")
 
     findings: list[Finding] = []
     for run in sarif.get("runs") or []:

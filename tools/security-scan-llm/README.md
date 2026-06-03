@@ -62,25 +62,30 @@ project:
   number: 7
 github_token_env: "GITHUB_TOKEN"   # PAT with repo + project scopes
 
-scanners:
-  codex:  true        # opt-in (cloud, ChatGPT/Codex subscription)
-  claude: true        # opt-in (cloud, Claude Max/Pro subscription)
-  gemma:  false       # opt-in (local Ollama; heavy on small hosts)
+# Each lane is an LLM that scans the repo; any two lanes cross-reference each
+# other. `name` = the scanner label / rule-id prefix. `backend` is one of
+# codex-cli | claude-cli | ollama.
+lanes:
+  - name: codex            # cloud, ChatGPT/Codex subscription
+    backend: codex-cli
+    model: null            # null => the codex CLI default
+  - name: claude           # cloud, Claude Max/Pro subscription
+    backend: claude-cli
+    model: claude-sonnet-4-6
+  - name: qwen             # any local Ollama model, labeled `qwen.*`
+    backend: ollama
+    model: qwen2.5-coder:32b
+    base_url: "http://localhost:11434"   # MUST be loopback or RFC1918
 
-# Optional tunables (defaults shown — omit any you're happy with)
-codex:
-  binary: "codex"
-claude:
-  binary: "claude"
-  model:  "claude-sonnet-4-6"   # null => the claude CLI's default
-gemma:
-  base_url: "http://localhost:11434"   # MUST be loopback or RFC1918
-  model:    "gemma4:26b"
 cross_validate:
-  enabled: true       # each finding reviewed by a different lane (when ≥2 lanes on)
+  enabled: true       # each finding reviewed by a different lane (when ≥2 lanes)
 triage:
-  enabled: false      # gemma-driven issue prose / slack intro / fuzzy-dedup
+  enabled: false      # ollama-driven issue prose / slack intro / fuzzy-dedup
 ```
+
+> **Legacy configs auto-migrate.** A pre-0.3 file using `scanners:` +
+> `codex:`/`claude:`/`gemma:` blocks is converted to lanes at load time (with a
+> one-line notice) — no edit required. New files should use `lanes:`.
 
 Full schema: see [SECURITY-SCAN-LLM-MANIFEST.yaml](./SECURITY-SCAN-LLM-MANIFEST.yaml).
 
@@ -100,8 +105,8 @@ Failure modes:
 | Cause | Behavior |
 |---|---|
 | `codex` / `claude` binary missing or not logged in | That lane returns `completed=False`; the other lanes continue. |
-| Ollama unreachable at `gemma.base_url` | That lane returns `completed=False`. |
-| No LLM lane enabled (`scanners.codex` / `claude` / `gemma` all false) | Exit 2 with a clear error — nothing to do. |
+| Ollama unreachable at an `ollama` lane's `base_url` | That lane returns `completed=False`. |
+| No lanes configured (`lanes:` empty / missing, no legacy `scanners:` either) | Exit 2 with a clear error — nothing to do. |
 | GitHub PAT missing `project` scope | Exit 4 with the GitHub API error. |
 | All enabled lanes failed | Exit 3. |
 

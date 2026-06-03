@@ -19,17 +19,21 @@
 #    paths, slack, github_token_env) are duplicated rather than imported —
 #    each tool owns its own contract.
 
-version: "0.2.0"
-config_schema_version: 1
+version: "0.3.0"
+config_schema_version: 2
 tool_name: "security-scan-llm"
 released: "2026-06-03"
 
 # One-liners for the upgrade prompt the skill shows users.
 changelog:
+  - "0.3.0: GENERIC LANES. Replace the fixed `scanners:` toggles + per-backend `codex:`/`claude:`/`gemma:` blocks with a `lanes:` list — each lane picks a `backend` (codex-cli / claude-cli / ollama) and a `model`, and its `name` becomes the scanner label / rule prefix. Any two lanes cross-reference each other, any Ollama model is a first-class lane, and N lanes are allowed. Legacy `scanners:` configs are auto-migrated at load time (no edit required)."
   - "0.2.0: add the Claude SAST lane (`scanners.claude`, uses the local `claude` CLI on a Max/Pro subscription) and make cross-validation lane-agnostic — any two of codex/claude/gemma now review each other. Fixes codex strict-output-schema and a normalize arg-order crash that previously blocked the LLM lanes from filing."
   - "0.1.0: initial release. Host-side LLM lane (codex + gemma + bidirectional cross-validation) for the leverj security-scan pipeline. Reads `<repo>/.security-scan/config-llm.yaml`. Files findings into the same Projects v2 board as the deterministic container, dedup'd via a byte-identical fingerprint scheme."
 
-breaking_changes: []
+breaking_changes:
+  - id: "lanes-list-replaces-scanners"
+    summary: "Config schema v2: `scanners:` toggles and the `codex:`/`claude:`/`gemma:` blocks are replaced by a single `lanes:` list. Per-lane cross-validate timeouts move from `cross_validate.<lane>_timeout` to each lane's `validate_timeout`."
+    user_action: "No action required to keep running — the tool auto-migrates a legacy `scanners:` config to lanes at load time and prints a one-line notice. To adopt the new schema, rewrite config-llm.yaml as a `lanes:` list (the skill offers this on upgrade)."
 
 config:
   # Required fields. The skill MUST resolve these from the user during setup.
@@ -53,44 +57,30 @@ config:
     - path: "paths.exclude"
       default: []
       note: "Glob list of paths excluded from LLM scanning."
-    - path: "scanners.codex"
-      default: false
-      note: "Enable OpenAI Codex SAST (uses local `codex` CLI subscription)."
-    - path: "scanners.claude"
-      default: false
-      note: "Enable Anthropic Claude SAST (uses local `claude` CLI on a Max/Pro subscription)."
-    - path: "scanners.gemma"
-      default: false
-      note: "Enable local Gemma SAST via Ollama."
-    - path: "codex"
+    - path: "lanes"
       default:
-        binary: "codex"
-        model: null
-        timeout: 1200
-      note: "Codex CLI tunables. Only used when scanners.codex is true."
-    - path: "claude"
-      default:
-        binary: "claude"
-        model: null
-        timeout: 1200
-      note: "Claude CLI tunables. Only used when scanners.claude is true. model null => the claude CLI default; set e.g. claude-sonnet-4-6 to pin."
-    - path: "gemma"
-      default:
-        base_url: "http://localhost:11434"
-        model: "gemma4:26b"
-        keep_alive: "5m"
-        timeout: 1800
-        max_files: 60
-        max_file_bytes: 12000
-        max_total_bytes: 200000
-      note: "Gemma SAST tunables. base_url MUST be loopback or RFC1918 — non-local URLs are refused at runtime."
+        - name: "codex"
+          backend: "codex-cli"
+          model: null
+          timeout: 1200
+          validate_timeout: 300
+        - name: "claude"
+          backend: "claude-cli"
+          model: "claude-sonnet-4-6"
+          timeout: 1200
+          validate_timeout: 300
+      note: >
+        List of LLM lanes. Each entry: name (scanner label / rule prefix),
+        backend (codex-cli | claude-cli | ollama), model (null => backend
+        default), timeout (primary scan), validate_timeout (per-finding
+        cross-validation). codex-cli/claude-cli accept an optional `binary`;
+        ollama lanes also take base_url (MUST be loopback/RFC1918), keep_alive,
+        max_files, max_file_bytes, max_total_bytes. At least one lane is
+        required; two enable cross-validation. Lane names must be unique.
     - path: "cross_validate"
       default:
         enabled: true
-        codex_timeout: 300
-        claude_timeout: 300
-        gemma_timeout: 180
-      note: "When at least two of scanners.codex/claude/gemma are true, each finding is reviewed by a different enabled lane. False positives downgrade severity one notch; critical never auto-downgrades; findings are never suppressed."
+      note: "When two or more lanes run, each finding is reviewed by a different lane. False positives downgrade severity one notch; critical never auto-downgrades; findings are never suppressed. Per-lane validation timeout is the lane's `validate_timeout`."
     - path: "triage"
       default:
         enabled: false
@@ -100,14 +90,26 @@ config:
         timeout: 600
         prewarm: true
         intro_timeout: 120
-      note: "Gemma-driven post-processing. Ollama URL/model inherit from `gemma:` when not set explicitly."
+      note: "Ollama-driven post-processing. Ollama URL/model inherit from the first `ollama` lane when not set explicitly."
     - path: "slack"
       default:
         enabled: false
       note: "Optional Slack digest of LLM-filed findings."
 
-  renamed_fields: []
-  removed_fields: []
+  renamed_fields:
+    - from: "cross_validate.codex_timeout / cross_validate.claude_timeout / cross_validate.gemma_timeout"
+      to: "lanes[].validate_timeout"
+      note: "Per-lane cross-validation timeout now lives on each lane. Auto-migrated from the legacy fields at load time."
+
+  removed_fields:
+    - path: "scanners"
+      note: "Replaced by the `lanes:` list. Auto-migrated at load time (scanners.codex -> codex-cli lane, scanners.claude -> claude-cli lane, scanners.gemma -> ollama lane)."
+    - path: "codex"
+      note: "Folded into a `lanes:` entry with backend codex-cli. Auto-migrated."
+    - path: "claude"
+      note: "Folded into a `lanes:` entry with backend claude-cli. Auto-migrated."
+    - path: "gemma"
+      note: "Folded into a `lanes:` entry with backend ollama. Auto-migrated."
 
 # Paths the consuming skill / orchestrator should know about.
 paths:

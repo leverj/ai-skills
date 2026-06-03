@@ -3,60 +3,53 @@
 YAML on disk at `<repo>/.security-scan/config-llm.yaml`. Secrets via env
 (never on disk). Schema is intentionally NARROW — LLM-lane fields only. The
 deterministic container reads its own `<repo>/.security-scan/config.yaml`.
+
+Lanes are GENERIC: a `lanes:` list where each entry picks a `backend`
+(codex-cli / claude-cli / ollama) and a `model`. Any two lanes cross-validate
+each other. Legacy `scanners:` + `codex:`/`claude:`/`gemma:` configs are
+auto-migrated in `load_config` so old files keep working unchanged.
 """
 
 from __future__ import annotations
 
 import os
+import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
 from security_scan_llm.models import SEVERITY_ORDER
+from security_scan_llm.redact import is_local_url
 
 
 class ConfigError(ValueError):
     """Bad config — surfaced to the user with a clear message."""
 
 
-@dataclass
-class ScannersConfig:
-    """Which LLM lanes to run. Independent toggles.
-
-    Both default OFF — the host tool is "the LLM lane substrate." A user
-    invoking it with neither toggle on gets a clear error rather than a
-    silent no-op."""
-    codex: bool = False     # OpenAI Codex via local `codex` CLI (subscription)
-    claude: bool = False    # Anthropic Claude via local `claude` CLI (subscription)
-    gemma: bool = False     # Local Gemma via Ollama
+# Backends a lane can run on. Each maps to a runner in `runners/`.
+#   codex-cli  -> `codex` CLI (ChatGPT/Codex subscription, agentic, reads repo)
+#   claude-cli -> `claude` CLI (Claude Max/Pro subscription, agentic, reads repo)
+#   ollama     -> local Ollama (any model; file-batched prompt)
+BACKENDS = ("codex-cli", "claude-cli", "ollama")
+_AGENTIC_BACKENDS = ("codex-cli", "claude-cli")
+_DEFAULT_BINARY = {"codex-cli": "codex", "claude-cli": "claude"}
 
 
 @dataclass
-class CodexConfig:
-    """Tunables for the local Codex CLI runner. Auth is `codex login`
-    (ChatGPT subscription); the tool never sees an API key."""
-    binary: str = "codex"
-    model: str | None = None    # None => use codex's configured default
-    timeout: int = 1200         # seconds
-
-
-@dataclass
-class ClaudeConfig:
-    """Tunables for the local Claude CLI runner. Auth is `claude` OAuth login
-    (Max/Pro subscription); the tool never sees an API key."""
-    binary: str = "claude"
-    model: str | None = None    # None => use the claude CLI's configured default
-    timeout: int = 1200         # seconds
-
-
-@dataclass
-class GemmaConfig:
-    """Tunables for the Ollama-backed Gemma SAST runner."""
-    base_url: str = "http://localhost:11434"   # loopback by default; refused if non-local
-    model: str = "gemma4:26b"
+class LaneConfig:
+    """One LLM lane. `name` is the scanner id + rule-id prefix (so a lane named
+    `qwen` files findings as `qwen.*`). `backend` selects the runner."""
+    name: str
+    backend: str                         # one of BACKENDS
+    model: str | None = None             # None => the backend CLI's default
+    timeout: int = 1200                  # primary-scan timeout (seconds)
+    validate_timeout: int = 300          # per-finding cross-validation timeout
+    binary: str | None = None            # codex-cli / claude-cli only
+    # ollama-only knobs:
+    base_url: str = "http://localhost:11434"   # MUST be loopback or RFC1918
     keep_alive: str = "5m"
-    timeout: int = 1800
     max_files: int = 60
     max_file_bytes: int = 12_000
     max_total_bytes: int = 200_000
@@ -64,18 +57,16 @@ class GemmaConfig:
 
 @dataclass
 class CrossValidateConfig:
-    """Bidirectional review: each LLM lane's findings are reviewed by a different
-    enabled lane (e.g. codex<->claude, codex<->gemma). No effect unless at least
-    TWO of scanners.codex / scanners.claude / scanners.gemma are enabled."""
+    """Bidirectional review across lanes: each finding is reviewed by a
+    different enabled lane. No effect unless at least TWO lanes run. Per-lane
+    validation timeouts live on each LaneConfig (`validate_timeout`)."""
     enabled: bool = True
-    codex_timeout: int = 300
-    claude_timeout: int = 300
-    gemma_timeout: int = 180
 
 
 @dataclass
 class TriageConfig:
-    """Gemma-driven post-processing. All flags default off-ish to keep cost down."""
+    """Ollama-driven post-processing. All flags default off-ish to keep cost
+    down. Ollama URL/model default to the first `ollama` lane when not set."""
     enabled: bool = False
     base_url: str = "http://localhost:11434"
     model: str = "gemma4:26b"
@@ -114,13 +105,10 @@ class Config:
     ref: str
     project: ProjectConfig
     github_token: str   # resolved from env; never logged
-    scanners: ScannersConfig
+    lanes: list[LaneConfig]
     paths: PathsConfig
     severity_floor: str
     slack: SlackConfig
-    codex: CodexConfig = field(default_factory=CodexConfig)
-    claude: ClaudeConfig = field(default_factory=ClaudeConfig)
-    gemma: GemmaConfig = field(default_factory=GemmaConfig)
     cross_validate: CrossValidateConfig = field(default_factory=CrossValidateConfig)
     triage: TriageConfig = field(default_factory=TriageConfig)
 
@@ -175,57 +163,31 @@ def _from_dict(raw: dict) -> Config:
     if floor not in SEVERITY_ORDER:
         raise ConfigError(f"config: severity_floor must be one of {list(SEVERITY_ORDER)}, got {floor!r}")
 
-    scanners_raw = raw.get("scanners") or {}
-    scanners = ScannersConfig(
-        codex=bool(scanners_raw.get("codex", False)),
-        claude=bool(scanners_raw.get("claude", False)),
-        gemma=bool(scanners_raw.get("gemma", False)),
-    )
-
-    codex_raw = raw.get("codex") or {}
-    codex_cfg = CodexConfig(
-        binary=str(codex_raw.get("binary") or "codex"),
-        model=(str(codex_raw.get("model")) if codex_raw.get("model") else None),
-        timeout=int(codex_raw.get("timeout") or 1200),
-    )
-
-    claude_raw = raw.get("claude") or {}
-    claude_cfg = ClaudeConfig(
-        binary=str(claude_raw.get("binary") or "claude"),
-        model=(str(claude_raw.get("model")) if claude_raw.get("model") else None),
-        timeout=int(claude_raw.get("timeout") or 1200),
-    )
-
-    gemma_raw = raw.get("gemma") or {}
-    gemma_cfg = GemmaConfig(
-        base_url=str(gemma_raw.get("base_url") or "http://localhost:11434"),
-        model=str(gemma_raw.get("model") or "gemma4:26b"),
-        keep_alive=str(gemma_raw.get("keep_alive") or "5m"),
-        timeout=int(gemma_raw.get("timeout") or 1800),
-        max_files=int(gemma_raw.get("max_files") or 60),
-        max_file_bytes=int(gemma_raw.get("max_file_bytes") or 12_000),
-        max_total_bytes=int(gemma_raw.get("max_total_bytes") or 200_000),
-    )
+    # Lanes: new `lanes:` list, or auto-migrated from the legacy schema.
+    if raw.get("lanes"):
+        lanes = [_parse_lane(item, i) for i, item in enumerate(raw["lanes"])]
+    else:
+        lanes = _migrate_legacy_lanes(raw)
+    _validate_lanes(lanes)
 
     cv_raw = raw.get("cross_validate") or {}
-    cv_cfg = CrossValidateConfig(
-        enabled=bool(cv_raw.get("enabled", True)),
-        codex_timeout=int(cv_raw.get("codex_timeout") or 300),
-        claude_timeout=int(cv_raw.get("claude_timeout") or 300),
-        gemma_timeout=int(cv_raw.get("gemma_timeout") or 180),
-    )
+    cv_cfg = CrossValidateConfig(enabled=bool(cv_raw.get("enabled", True)))
 
     paths_raw = raw.get("paths") or {}
     paths = PathsConfig(exclude=list(paths_raw.get("exclude") or []))
 
+    # Triage Ollama defaults inherit from the first `ollama` lane so the user
+    # configures Ollama once. Explicit `triage.<field>` still wins.
+    first_ollama = next((ln for ln in lanes if ln.backend == "ollama"), None)
+    ol_url = first_ollama.base_url if first_ollama else "http://localhost:11434"
+    ol_model = first_ollama.model if (first_ollama and first_ollama.model) else "gemma4:26b"
+    ol_keep = first_ollama.keep_alive if first_ollama else "5m"
     triage_raw = raw.get("triage") or {}
-    # Triage Ollama defaults inherit from `gemma:` so the user configures
-    # Ollama once. Explicit `triage.<field>` still wins.
     triage_cfg = TriageConfig(
         enabled=bool(triage_raw.get("enabled", False)),
-        base_url=str(triage_raw.get("base_url") or gemma_cfg.base_url),
-        model=str(triage_raw.get("model") or gemma_cfg.model),
-        keep_alive=str(triage_raw.get("keep_alive") or gemma_cfg.keep_alive),
+        base_url=str(triage_raw.get("base_url") or ol_url),
+        model=str(triage_raw.get("model") or ol_model),
+        keep_alive=str(triage_raw.get("keep_alive") or ol_keep),
         timeout=int(triage_raw.get("timeout") or 600),
         prewarm=bool(triage_raw.get("prewarm", True)),
         intro_timeout=int(triage_raw.get("intro_timeout") or 120),
@@ -247,13 +209,115 @@ def _from_dict(raw: dict) -> Config:
         ref=ref,
         project=project,
         github_token=token,
-        scanners=scanners,
+        lanes=lanes,
         paths=paths,
         severity_floor=floor,
         slack=slack,
-        codex=codex_cfg,
-        claude=claude_cfg,
-        gemma=gemma_cfg,
         cross_validate=cv_cfg,
         triage=triage_cfg,
     )
+
+
+def _parse_lane(item: dict, idx: int) -> LaneConfig:
+    if not isinstance(item, dict):
+        raise ConfigError(f"config: lanes[{idx}] must be a mapping")
+    name = str(_require(item, "name", f"lanes[{idx}]"))
+    backend = str(_require(item, "backend", f"lanes[{idx}]"))
+    if backend not in BACKENDS:
+        raise ConfigError(
+            f"config: lanes[{idx}].backend must be one of {list(BACKENDS)}, got {backend!r}"
+        )
+    binary = item.get("binary") or (_DEFAULT_BINARY.get(backend))
+    return LaneConfig(
+        name=name,
+        backend=backend,
+        model=(str(item["model"]) if item.get("model") else None),
+        timeout=int(item.get("timeout") or 1200),
+        validate_timeout=int(item.get("validate_timeout") or 300),
+        binary=binary,
+        base_url=str(item.get("base_url") or "http://localhost:11434"),
+        keep_alive=str(item.get("keep_alive") or "5m"),
+        max_files=int(item.get("max_files") or 60),
+        max_file_bytes=int(item.get("max_file_bytes") or 12_000),
+        max_total_bytes=int(item.get("max_total_bytes") or 200_000),
+    )
+
+
+def _validate_lanes(lanes: list[LaneConfig]) -> None:
+    if not lanes:
+        raise ConfigError(
+            "config: no lanes enabled — add at least one entry under `lanes:` "
+            "(or set a legacy scanners.* toggle). Two lanes are needed for cross-validation."
+        )
+    seen: set[str] = set()
+    for ln in lanes:
+        # name becomes the SARIF driver name + rule-id prefix + issue-title text;
+        # keep it to a safe kebab/alnum set so it can't malform downstream output.
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", ln.name):
+            raise ConfigError(
+                f"config: lane name {ln.name!r} must match [A-Za-z0-9_-]+ (short kebab-case)"
+            )
+        if ln.name in seen:
+            raise ConfigError(f"config: duplicate lane name {ln.name!r} — names must be unique")
+        seen.add(ln.name)
+        # binary must be a bare command resolved on PATH, never a path to an
+        # arbitrary on-disk executable.
+        if ln.binary and os.path.basename(ln.binary) != ln.binary:
+            raise ConfigError(
+                f"config: lane {ln.name!r} binary {ln.binary!r} must be a bare command name, not a path"
+            )
+        if ln.backend == "ollama" and not is_local_url(ln.base_url):
+            raise ConfigError(
+                f"config: lane {ln.name!r} base_url {ln.base_url!r} is not loopback/RFC1918 — "
+                "source content must not cross a public boundary to a remote Ollama"
+            )
+
+
+def _migrate_legacy_lanes(raw: dict) -> list[LaneConfig]:
+    """Synthesize a `lanes:` list from the legacy schema (scanners.* toggles +
+    codex:/claude:/gemma: blocks + cross_validate.<lane>_timeout). Keeps old
+    config files working without an edit."""
+    scanners = raw.get("scanners") or {}
+    cv = raw.get("cross_validate") or {}
+    lanes: list[LaneConfig] = []
+
+    if scanners.get("codex"):
+        c = raw.get("codex") or {}
+        lanes.append(LaneConfig(
+            name="codex", backend="codex-cli",
+            model=(str(c["model"]) if c.get("model") else None),
+            timeout=int(c.get("timeout") or 1200),
+            validate_timeout=int(cv.get("codex_timeout") or 300),
+            binary=str(c.get("binary") or "codex"),
+        ))
+    if scanners.get("claude"):
+        c = raw.get("claude") or {}
+        lanes.append(LaneConfig(
+            name="claude", backend="claude-cli",
+            model=(str(c["model"]) if c.get("model") else None),
+            timeout=int(c.get("timeout") or 1200),
+            validate_timeout=int(cv.get("claude_timeout") or 300),
+            binary=str(c.get("binary") or "claude"),
+        ))
+    if scanners.get("gemma"):
+        g = raw.get("gemma") or {}
+        lanes.append(LaneConfig(
+            name="gemma", backend="ollama",
+            model=str(g.get("model") or "gemma4:26b"),
+            timeout=int(g.get("timeout") or 1800),
+            validate_timeout=int(cv.get("gemma_timeout") or 180),
+            base_url=str(g.get("base_url") or "http://localhost:11434"),
+            keep_alive=str(g.get("keep_alive") or "5m"),
+            max_files=int(g.get("max_files") or 60),
+            max_file_bytes=int(g.get("max_file_bytes") or 12_000),
+            max_total_bytes=int(g.get("max_total_bytes") or 200_000),
+        ))
+
+    if lanes:
+        print(
+            "config: migrated legacy `scanners:` config to "
+            f"{len(lanes)} lane(s) ({', '.join(ln.name for ln in lanes)}). "
+            "Consider rewriting config-llm.yaml to the `lanes:` list — see the manifest.",
+            file=sys.stderr,
+        )
+    return lanes
