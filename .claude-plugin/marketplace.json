@@ -6,12 +6,12 @@
   },
   "metadata": {
     "description": "Agent skills bundle for AI coding tools",
-    "version": "0.5.2"
+    "version": "0.6.0"
   },
   "plugins": [
     {
       "name": "leverj",
-      "description": "Leverj agent skills bundle. Includes: sprint (scrum/kanban workflow on GitHub Projects v2 — issues are requirements, Project fields are state, ADRs in .dev/decisions/); triage (end-to-end triage & fix loop over an epic's sub-issues or a GitHub Projects v2 board — auto-closes dup/wontfix, bundles trivial dep bumps into PRs); security-scan (drives the leverj/security-scan Docker image for deterministic scanning + a host-side security-scan-llm companion tool for codex/gemma LLM SAST; both substrates file into the same GitHub Projects v2 board with a user-confirmed image-upgrade + config-migration flow).",
+      "description": "Leverj agent skills bundle. Includes: sprint (scrum/kanban workflow on GitHub Projects v2 — issues are requirements, Project fields are state, ADRs in .dev/decisions/); triage (end-to-end triage & fix loop over an epic's sub-issues or a GitHub Projects v2 board — auto-closes dup/wontfix, bundles trivial dep bumps into PRs); security-scan (drives the leverj/security-scan Docker image for deterministic scanning; config is repo-local at <repo>/.security-scan/config.yaml; LLM SAST is a separate standalone CLI under tools/security-scan-llm/; both substrates file into the same GitHub Projects v2 board with shared fingerprints).",
       "source": "./",
       "strict": false,
       "skills": [

@@ -1,7 +1,8 @@
-"""Config loader. YAML on disk; secrets via env (never on disk).
+"""Config loader for the host-side LLM lane.
 
-Fail-fast: missing required fields, missing env vars, or invalid severity_floor
-raise ConfigError before any scanner runs.
+YAML on disk at `<repo>/.security-scan/config-llm.yaml`. Secrets via env
+(never on disk). Schema is intentionally NARROW — LLM-lane fields only. The
+deterministic container reads its own `<repo>/.security-scan/config.yaml`.
 """
 
 from __future__ import annotations
@@ -21,39 +22,30 @@ class ConfigError(ValueError):
 
 @dataclass
 class ScannersConfig:
-    osv: bool = True
-    gitleaks: bool = True
-    semgrep: bool = True
-    trivy: bool = True          # comprehensive: vuln + secret + misconfig + license
-    trufflehog: bool = True     # verified secrets (validates live tokens)
-    syft: bool = True           # SBOM artifact (no project items filed)
-    # LLM-driven SAST. Both default OFF — they consume external compute
-    # (Codex subscription quota, Gemma GPU time) and produce noisier findings
-    # than the deterministic scanners. Enable to add depth coverage.
-    codex: bool = False         # OpenAI Codex via local `codex` CLI (subscription)
-    gemma: bool = False         # Local Gemma 4 via Ollama
+    """Which LLM lanes to run. Independent toggles.
+
+    Both default OFF — the host tool is "the LLM lane substrate." A user
+    invoking it with neither toggle on gets a clear error rather than a
+    silent no-op."""
+    codex: bool = False     # OpenAI Codex via local `codex` CLI (subscription)
+    gemma: bool = False     # Local Gemma via Ollama
 
 
 @dataclass
 class CodexConfig:
-    """Tunables for the local Codex CLI runner. Auth is via `codex login`
-    (ChatGPT subscription); security_scan never sees an API key."""
+    """Tunables for the local Codex CLI runner. Auth is `codex login`
+    (ChatGPT subscription); the tool never sees an API key."""
     binary: str = "codex"
     model: str | None = None    # None => use codex's configured default
-    timeout: int = 1200         # seconds; LLM scans can run minutes
+    timeout: int = 1200         # seconds
 
 
 @dataclass
-class GemmaScannerConfig:
-    """Tunables for the Ollama-backed Gemma SAST runner.
-
-    By default this shares the Ollama URL/model with the existing triage
-    config (so you only configure Ollama once). You can override here when
-    you want a different model for primary SAST vs. validator triage.
-    """
-    base_url: str | None = None  # falls back to triage.base_url
-    model: str | None = None     # falls back to triage.model
-    keep_alive: str | None = None
+class GemmaConfig:
+    """Tunables for the Ollama-backed Gemma SAST runner."""
+    base_url: str = "http://localhost:11434"   # loopback by default; refused if non-local
+    model: str = "gemma4:26b"
+    keep_alive: str = "5m"
     timeout: int = 1800
     max_files: int = 60
     max_file_bytes: int = 12_000
@@ -65,113 +57,28 @@ class CrossValidateConfig:
     """Bidirectional review: Codex reviews Gemma findings, Gemma reviews Codex.
     No effect unless BOTH scanners.codex and scanners.gemma are enabled."""
     enabled: bool = True
-    codex_timeout: int = 300    # per-finding budget when codex reviews a gemma finding
-    gemma_timeout: int = 180    # per-finding budget when gemma reviews a codex finding
+    codex_timeout: int = 300
+    gemma_timeout: int = 180
 
 
 @dataclass
-class BuiltImageConfig:
-    """Mode C of the image-scan lane. Off by default.
-
-    Two sub-modes (mutually exclusive):
-      - `ref` — pull `<ref>` and scan it. Same trust boundary as `docker pull`.
-      - `build_locally` — `docker build .` the cloned repo, then scan. Requires
-        the docker socket mounted AND SECURITY_SCAN_ALLOW_BUILD=1 in env (since
-        docker build executes the repo's RUN lines, breaking the
-        "never execute repo code" invariant for this opt-in mode only).
-    """
+class TriageConfig:
+    """Gemma-driven post-processing. All flags default off-ish to keep cost down."""
     enabled: bool = False
-    ref: str | None = None
-    build_locally: bool = False
-
-
-@dataclass
-class ImageScanConfig:
-    """Container image scanning lane. Three modes (epic #9):
-      A. Dockerfile audit  — handled by the existing trivy fs misconfig scanner.
-      B. base_images       — `trivy image` over every FROM ref in the repo's
-                             Dockerfiles. Default ON; cacheable.
-      C. built_image       — opt-in pull-or-build + scan; see BuiltImageConfig.
-    """
-    base_images: bool = True
-    built_image: BuiltImageConfig = field(default_factory=BuiltImageConfig)
-    timeout: int = 600           # per `trivy image` call
-    trivy_binary: str = "trivy"
-    docker_binary: str = "docker"
-
-
-@dataclass
-class SupabaseConfig:
-    """Live Supabase Security Advisor lane (epic #4).
-
-    Off by default. When enabled, the scanner opens a read-only connection
-    to the project's Postgres and runs Supabase Studio's lint queries
-    against the live DB. Secrets resolve from env vars at runtime — never
-    on disk.
-
-    Two ways to provide credentials (use whichever your secrets pipeline
-    already supports):
-
-      1. `url_env`     — name of an env var holding a full DSN
-                         (`postgres://user:pass@host:port/db`). Takes precedence.
-      2. discrete envs — `host_env`, `db_env`, `user_env`, `password_env`,
-                         plus optional `port` and `sslmode`.
-
-    The recommended setup is a low-privilege read-only role:
-      CREATE ROLE security_scanner LOGIN PASSWORD '...';
-      GRANT pg_read_all_settings, pg_read_all_data TO security_scanner;
-    """
-    enabled: bool = False
-    url_env: str | None = None
-    host_env: str | None = None
-    db_env: str | None = None
-    user_env: str | None = None
-    password_env: str | None = None
-    port: int = 5432
-    sslmode: str = "require"
-    connect_timeout: int = 10
-    query_timeout_ms: int = 30_000
-    # Optional subset of lint check names (`supabase.<check>`) — None => all.
-    checks: list[str] | None = None
+    base_url: str = "http://localhost:11434"
+    model: str = "gemma4:26b"
+    keep_alive: str = "5m"
+    timeout: int = 600
+    prewarm: bool = True
+    intro_timeout: int = 120
+    intro_enabled: bool = True       # 1 chat call/run; ~free
+    prose_enabled: bool = False      # 1 chat call/finding; expensive
+    fuzzy_dup_enabled: bool = False  # 1 chat call/finding; expensive
 
 
 @dataclass
 class PathsConfig:
     exclude: list[str] = field(default_factory=list)
-
-
-@dataclass
-class TriageConfig:
-    enabled: bool = False
-    provider: str = "ollama"
-    model: str = "gemma4:26b"
-    base_url: str = "http://host.docker.internal:11434"
-    keep_alive: str = "5m"
-    # Cold-start of a ~17 GB Gemma model can take several minutes the first time
-    # of the day. Subsequent calls are fast thanks to keep_alive. 600s tolerates
-    # the cold case for fuzzy-dedup + prose generation.
-    timeout: int = 600
-    # If True, kick off a model-warming request in a BACKGROUND thread when
-    # Triage is constructed. Scans run while the model loads; by the time we
-    # need the Slack intro the model is hot. Strongly recommended for large models.
-    prewarm: bool = True
-    # Intro generation runs at the end of the pipeline. Cap it separately and
-    # shorter than `timeout`: if Gemma can't produce a one-liner in this window
-    # we skip the intro and post the structured digest without it. Default 120s.
-    intro_timeout: int = 120
-    # Granular feature flags. Each defaults to a sensible value so flipping
-    # `enabled: true` doesn't accidentally explode runtime.
-    #
-    #   intro      — one short Gemma-written sentence prepended to the Slack
-    #                digest. Cheap: 1 chat call at the end of the run.
-    #   prose      — Gemma rewrites issue title/body for each NEW finding.
-    #                Expensive: 1 chat call per new finding. Off by default.
-    #   fuzzy_dup  — Gemma decides whether a new finding is a fuzzy match for
-    #                an existing issue at a different path/name. Expensive:
-    #                1 chat call per new (post-fp-dedup) finding. Off by default.
-    intro_enabled: bool = True
-    prose_enabled: bool = False
-    fuzzy_dup_enabled: bool = False
 
 
 @dataclass
@@ -184,10 +91,7 @@ class SlackConfig:
 
 @dataclass
 class ProjectConfig:
-    """Target GitHub Projects v2 board. Findings file as flat items here — no
-    parent/child epic relationship. The owner is the org or user that owns the
-    project; `number` is the project number from the URL (`/projects/<number>`).
-    """
+    """Target GitHub Projects v2 board."""
     owner: str
     number: int
 
@@ -197,19 +101,15 @@ class Config:
     repo: str
     ref: str
     project: ProjectConfig
-    github_token: str  # resolved from env; never logged
+    github_token: str   # resolved from env; never logged
     scanners: ScannersConfig
     paths: PathsConfig
     severity_floor: str
-    triage: TriageConfig
     slack: SlackConfig
     codex: CodexConfig = field(default_factory=CodexConfig)
-    gemma: GemmaScannerConfig = field(default_factory=GemmaScannerConfig)
+    gemma: GemmaConfig = field(default_factory=GemmaConfig)
     cross_validate: CrossValidateConfig = field(default_factory=CrossValidateConfig)
-    image_scan: ImageScanConfig = field(default_factory=ImageScanConfig)
-    supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
-    # bundled defaults
-    semgrep_rules_dir: str | None = None
+    triage: TriageConfig = field(default_factory=TriageConfig)
 
     @property
     def repo_owner(self) -> str:
@@ -222,7 +122,10 @@ class Config:
 
 def _require(d: dict, key: str, path: str) -> object:
     if key not in d or d[key] in (None, ""):
-        raise ConfigError(f"config: missing required field '{path}.{key}'" if path else f"config: missing required field '{key}'")
+        raise ConfigError(
+            f"config: missing required field '{path}.{key}'" if path
+            else f"config: missing required field '{key}'"
+        )
     return d[key]
 
 
@@ -261,12 +164,6 @@ def _from_dict(raw: dict) -> Config:
 
     scanners_raw = raw.get("scanners") or {}
     scanners = ScannersConfig(
-        osv=bool(scanners_raw.get("osv", True)),
-        gitleaks=bool(scanners_raw.get("gitleaks", True)),
-        semgrep=bool(scanners_raw.get("semgrep", True)),
-        trivy=bool(scanners_raw.get("trivy", True)),
-        trufflehog=bool(scanners_raw.get("trufflehog", True)),
-        syft=bool(scanners_raw.get("syft", True)),
         codex=bool(scanners_raw.get("codex", False)),
         gemma=bool(scanners_raw.get("gemma", False)),
     )
@@ -279,10 +176,10 @@ def _from_dict(raw: dict) -> Config:
     )
 
     gemma_raw = raw.get("gemma") or {}
-    gemma_cfg = GemmaScannerConfig(
-        base_url=(str(gemma_raw.get("base_url")) if gemma_raw.get("base_url") else None),
-        model=(str(gemma_raw.get("model")) if gemma_raw.get("model") else None),
-        keep_alive=(str(gemma_raw.get("keep_alive")) if gemma_raw.get("keep_alive") else None),
+    gemma_cfg = GemmaConfig(
+        base_url=str(gemma_raw.get("base_url") or "http://localhost:11434"),
+        model=str(gemma_raw.get("model") or "gemma4:26b"),
+        keep_alive=str(gemma_raw.get("keep_alive") or "5m"),
         timeout=int(gemma_raw.get("timeout") or 1800),
         max_files=int(gemma_raw.get("max_files") or 60),
         max_file_bytes=int(gemma_raw.get("max_file_bytes") or 12_000),
@@ -296,65 +193,20 @@ def _from_dict(raw: dict) -> Config:
         gemma_timeout=int(cv_raw.get("gemma_timeout") or 180),
     )
 
-    img_raw = raw.get("image_scan") or {}
-    built_raw = img_raw.get("built_image") or {}
-    image_scan_cfg = ImageScanConfig(
-        base_images=bool(img_raw.get("base_images", True)),
-        built_image=BuiltImageConfig(
-            enabled=bool(built_raw.get("enabled", False)),
-            ref=(str(built_raw.get("ref")) if built_raw.get("ref") else None),
-            build_locally=bool(built_raw.get("build_locally", False)),
-        ),
-        timeout=int(img_raw.get("timeout") or 600),
-        trivy_binary=str(img_raw.get("trivy_binary") or "trivy"),
-        docker_binary=str(img_raw.get("docker_binary") or "docker"),
-    )
-
-    sb_raw = raw.get("supabase") or {}
-    sb_cfg = SupabaseConfig(
-        enabled=bool(sb_raw.get("enabled", False)),
-        url_env=(str(sb_raw.get("url_env")) if sb_raw.get("url_env") else None),
-        host_env=(str(sb_raw.get("host_env")) if sb_raw.get("host_env") else None),
-        db_env=(str(sb_raw.get("db_env")) if sb_raw.get("db_env") else None),
-        user_env=(str(sb_raw.get("user_env")) if sb_raw.get("user_env") else None),
-        password_env=(str(sb_raw.get("password_env")) if sb_raw.get("password_env") else None),
-        port=int(sb_raw.get("port") or 5432),
-        sslmode=str(sb_raw.get("sslmode") or "require"),
-        connect_timeout=int(sb_raw.get("connect_timeout") or 10),
-        query_timeout_ms=int(sb_raw.get("query_timeout_ms") or 30_000),
-        checks=(list(sb_raw.get("checks")) if sb_raw.get("checks") else None),
-    )
-    # Validate at load time: if enabled, the user must give us SOME way to
-    # connect. Don't fail on missing env vars yet — that's runtime concern.
-    if sb_cfg.enabled and not sb_cfg.url_env and not all(
-        [sb_cfg.host_env, sb_cfg.db_env, sb_cfg.user_env, sb_cfg.password_env]
-    ):
-        raise ConfigError(
-            "config: supabase.enabled=true but no credentials configured. "
-            "Set either `url_env` (DSN) OR all of host_env/db_env/user_env/password_env."
-        )
-
     paths_raw = raw.get("paths") or {}
     paths = PathsConfig(exclude=list(paths_raw.get("exclude") or []))
 
     triage_raw = raw.get("triage") or {}
-    try:
-        triage_timeout = int(triage_raw.get("timeout") or 600)
-    except (TypeError, ValueError):
-        triage_timeout = 600
-    try:
-        intro_timeout = int(triage_raw.get("intro_timeout") or 120)
-    except (TypeError, ValueError):
-        intro_timeout = 120
-    triage = TriageConfig(
+    # Triage Ollama defaults inherit from `gemma:` so the user configures
+    # Ollama once. Explicit `triage.<field>` still wins.
+    triage_cfg = TriageConfig(
         enabled=bool(triage_raw.get("enabled", False)),
-        provider=str(triage_raw.get("provider") or "ollama"),
-        model=str(triage_raw.get("model") or "gemma4:26b"),
-        base_url=str(triage_raw.get("base_url") or "http://host.docker.internal:11434"),
-        keep_alive=str(triage_raw.get("keep_alive") or "5m"),
-        timeout=triage_timeout,
+        base_url=str(triage_raw.get("base_url") or gemma_cfg.base_url),
+        model=str(triage_raw.get("model") or gemma_cfg.model),
+        keep_alive=str(triage_raw.get("keep_alive") or gemma_cfg.keep_alive),
+        timeout=int(triage_raw.get("timeout") or 600),
         prewarm=bool(triage_raw.get("prewarm", True)),
-        intro_timeout=intro_timeout,
+        intro_timeout=int(triage_raw.get("intro_timeout") or 120),
         intro_enabled=bool(triage_raw.get("intro_enabled", True)),
         prose_enabled=bool(triage_raw.get("prose_enabled", False)),
         fuzzy_dup_enabled=bool(triage_raw.get("fuzzy_dup_enabled", False)),
@@ -376,12 +228,9 @@ def _from_dict(raw: dict) -> Config:
         scanners=scanners,
         paths=paths,
         severity_floor=floor,
-        triage=triage,
         slack=slack,
         codex=codex_cfg,
         gemma=gemma_cfg,
         cross_validate=cv_cfg,
-        image_scan=image_scan_cfg,
-        supabase=sb_cfg,
-        semgrep_rules_dir=raw.get("semgrep_rules_dir"),
+        triage=triage_cfg,
     )

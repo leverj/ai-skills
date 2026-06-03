@@ -1,0 +1,104 @@
+# SECURITY-SCAN-LLM-MANIFEST.yaml
+#
+# Contract for the host-side LLM-lane companion to `leverj/security-scan`.
+# Mirrors the shape of the container's SECURITY-SCAN-MANIFEST.yaml.
+#
+# Read it from outside the tool with:
+#   cat <ai-skills-clone>/tools/security-scan-llm/SECURITY-SCAN-LLM-MANIFEST.yaml
+#
+# Contract:
+#  - `version` matches pyproject.toml's [project.version].
+#  - `config_schema_version` bumps only when the YAML schema changes in a way
+#    that needs migration (adding optional fields with defaults does NOT
+#    require a bump; renames and removals do).
+#  - The host tool's config lives at `<repo>/.security-scan/config-llm.yaml`
+#    — INDEPENDENT from the container's `<repo>/.security-scan/config.yaml`.
+#  - `config.new_fields` lists fields the consuming skill should ensure
+#    exist with documented defaults.
+#  - Shared keys with the container config (repo, ref, project, severity_floor,
+#    paths, slack, github_token_env) are duplicated rather than imported —
+#    each tool owns its own contract.
+
+version: "0.1.0"
+config_schema_version: 1
+tool_name: "security-scan-llm"
+released: "2026-06-03"
+
+# One-liners for the upgrade prompt the skill shows users.
+changelog:
+  - "0.1.0: initial release. Host-side LLM lane (codex + gemma + bidirectional cross-validation) for the leverj security-scan pipeline. Reads `<repo>/.security-scan/config-llm.yaml`. Files findings into the same Projects v2 board as the deterministic container, dedup'd via a byte-identical fingerprint scheme."
+
+breaking_changes: []
+
+config:
+  # Required fields. The skill MUST resolve these from the user during setup.
+  required_fields:
+    - path: "repo"
+      note: "owner/name of the GitHub repository being scanned. Identical to the container's config.yaml field."
+    - path: "ref"
+      note: "git ref (branch/tag/sha) to scan. Identical to the container's config.yaml field."
+    - path: "project.owner"
+      note: "Org or user owning the Projects v2 board."
+    - path: "project.number"
+      note: "Project number (integer from the project URL: /projects/<number>)."
+    - path: "github_token_env"
+      note: "Env var name (default GITHUB_TOKEN) holding a PAT with repo + project scopes."
+
+  # Optional fields the skill should ADD with documented defaults when missing.
+  new_fields:
+    - path: "severity_floor"
+      default: "low"
+      note: "Lowest severity that gets filed. Drops below-floor findings client-side."
+    - path: "paths.exclude"
+      default: []
+      note: "Glob list of paths excluded from LLM scanning."
+    - path: "scanners.codex"
+      default: false
+      note: "Enable OpenAI Codex SAST (uses local `codex` CLI subscription)."
+    - path: "scanners.gemma"
+      default: false
+      note: "Enable local Gemma SAST via Ollama."
+    - path: "codex"
+      default:
+        binary: "codex"
+        model: null
+        timeout: 1200
+      note: "Codex CLI tunables. Only used when scanners.codex is true."
+    - path: "gemma"
+      default:
+        base_url: "http://localhost:11434"
+        model: "gemma4:26b"
+        keep_alive: "5m"
+        timeout: 1800
+        max_files: 60
+        max_file_bytes: 12000
+        max_total_bytes: 200000
+      note: "Gemma SAST tunables. base_url MUST be loopback or RFC1918 — non-local URLs are refused at runtime."
+    - path: "cross_validate"
+      default:
+        enabled: true
+        codex_timeout: 300
+        gemma_timeout: 180
+      note: "When both scanners.codex AND scanners.gemma are true, each reviews the other's findings. False positives downgrade severity one notch; critical never auto-downgrades; findings are never suppressed."
+    - path: "triage"
+      default:
+        enabled: false
+        intro_enabled: true
+        prose_enabled: false
+        fuzzy_dup_enabled: false
+        timeout: 600
+        prewarm: true
+        intro_timeout: 120
+      note: "Gemma-driven post-processing. Ollama URL/model inherit from `gemma:` when not set explicitly."
+    - path: "slack"
+      default:
+        enabled: false
+      note: "Optional Slack digest of LLM-filed findings."
+
+  renamed_fields: []
+  removed_fields: []
+
+# Paths the consuming skill / orchestrator should know about.
+paths:
+  config: "<repo>/.security-scan/config-llm.yaml"
+  state:  "<repo>/.security-scan/.security-scan-llm-state.yaml"
