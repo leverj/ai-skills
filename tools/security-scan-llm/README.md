@@ -3,11 +3,21 @@
 Host-side LLM SAST lanes (codex + gemma + bidirectional cross-validation)
 for the leverj security-scan pipeline.
 
-**Standalone CLI** — not orchestrated by the `security-scan` Claude Code
-skill. The skill drives the deterministic container; this tool drives the
-LLM lanes from the host. Both file into the **same** GitHub Projects v2
-board with a **byte-identical** fingerprint scheme, so findings dedup
-across substrates.
+Two ways to drive it:
+
+- **Directly** as a CLI (this README) — from CI, scripts, or a developer's
+  terminal. No Claude Code involved.
+- **Via the Claude Code skill** [`/leverj:security-scan-llm`](../../skills/security-scan-llm/SKILL.md)
+  — wraps this CLI with interactive setup, version-vs-manifest upgrade
+  prompts, config-migration, and substrate health checks (codex login,
+  Ollama reachability). Use the skill when you want the same UX the
+  static-lane skill provides; use the CLI for everything else.
+
+Sibling concern: the deterministic scanners live in the
+`leverj/security-scan` Docker container (driven by
+[`/leverj:security-scan`](../../skills/security-scan/SKILL.md)). Both
+substrates file into the **same** GitHub Projects v2 board with a
+**byte-identical** fingerprint scheme, so findings dedup across substrates.
 
 ## Why this lives on the host (not in the container)
 
