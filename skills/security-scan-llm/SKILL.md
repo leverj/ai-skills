@@ -188,33 +188,34 @@ Run a non-destructive check before invoking the tool.
 
 2. **PAT**: env var named by `github_token_env` is set + non-empty.
 
-3. **At least one LLM lane enabled**: if `scanners.codex`, `scanners.claude`
-   and `scanners.gemma` are all false, stop with a clear message — the tool
-   will error otherwise. (Cross-validation needs **two** lanes; with only one
-   enabled, it's a no-op.)
+3. **At least one lane configured**: read `lanes:` (or, on a legacy file, the
+   `scanners:` toggles the tool will auto-migrate). If there are zero lanes,
+   stop — the tool errors otherwise. (Cross-validation needs **two** lanes;
+   with one, it's a no-op.) Each lane's `backend` is `codex-cli`,
+   `claude-cli`, or `ollama`; health-check each lane by its backend:
 
-4. **Codex health** (if `scanners.codex: true`):
+4. **codex-cli lane health** (for each lane with `backend: codex-cli`):
    ```bash
    command -v codex >/dev/null || { echo "codex CLI not on PATH"; FAIL=1; }
    codex login status >/dev/null 2>&1 || { echo "codex not logged in — run 'codex login'"; FAIL=1; }
    ```
-   If either fails: surface clearly and ask whether to proceed with the other
-   enabled lane(s) (silently) or stop.
+   If it fails: surface clearly and ask whether to proceed with the other
+   lane(s) or stop.
 
-5. **Claude health** (if `scanners.claude: true`):
+5. **claude-cli lane health** (for each lane with `backend: claude-cli`):
    ```bash
    command -v claude >/dev/null || { echo "claude CLI not on PATH"; FAIL=1; }
    # Subscription auth (no API key). A non-empty oauthAccount in ~/.claude.json
    # means logged in; an ANTHROPIC_API_KEY in env would route to metered API.
    ```
    If `claude` is missing, surface clearly and ask whether to proceed with the
-   other enabled lane(s) or stop. The lane uses the user's Claude Max/Pro
-   subscription — flag that a full audit draws the same usage pool as their
-   interactive Claude Code sessions.
+   other lane(s) or stop. The lane uses the user's Claude Max/Pro subscription —
+   flag that a full audit draws the same usage pool as their interactive
+   Claude Code sessions.
 
-6. **Gemma / Ollama health** (if `scanners.gemma: true`):
+6. **ollama lane health** (for each lane with `backend: ollama`):
    ```bash
-   BASE_URL="$(yq '.gemma.base_url' "${CFG}" 2>/dev/null || echo http://localhost:11434)"
+   BASE_URL="<lane.base_url, default http://localhost:11434>"
    curl -fsS "${BASE_URL%/}/api/tags" >/dev/null \
      || { echo "Ollama unreachable at ${BASE_URL}"; FAIL=1; }
    ```
@@ -271,23 +272,24 @@ relative to that.
    - `ref` — default: `main`.
    - `project.owner`, `project.number` — required from user.
    - `github_token_env` — default: `GITHUB_TOKEN`.
-5. **Lane prompts:**
-   - `scanners.codex: true/false` — default false. **Surface:** uses your
-     ChatGPT/Codex subscription quota; each run can consume several minutes
-     of model time.
-   - `scanners.claude: true/false` — default false. **Surface:** uses your
-     Claude Max/Pro subscription (the local `claude` CLI; no API key). A full
-     audit draws the same usage pool as the user's interactive Claude Code
-     sessions. Offer to pin `claude.model` (e.g. `claude-sonnet-4-6` for a
-     lighter usage footprint than Opus).
-   - `scanners.gemma: true/false` — default false. **Surface:** uses your
-     local Ollama (must be running); first run can take minutes for the
-     model to warm. Source files cross the loopback boundary to Ollama;
-     `gemma.base_url` must be loopback or RFC1918. Heavy on small hosts —
-     a 26B model needs a box with headroom well above its weight.
-6. **Cross-validate prompt** (only if ≥2 lanes enabled): `cross_validate.enabled`
-   — default true. **Surface:** each finding is reviewed by a different
-   enabled lane; reduces false positives but adds an LLM call per finding.
+5. **Lane prompts:** build the `lanes:` list. Each lane = `{name, backend,
+   model, ...}`. Offer these backends (default two-lane setup: codex + claude):
+   - **`codex-cli`** — uses the ChatGPT/Codex subscription via the local
+     `codex` CLI. Each run can consume several minutes of model time.
+   - **`claude-cli`** — uses the Claude Max/Pro subscription via the local
+     `claude` CLI (no API key). A full audit draws the same usage pool as the
+     user's interactive Claude Code sessions. Offer to pin `model`
+     (e.g. `claude-sonnet-4-6` for a lighter footprint than Opus).
+   - **`ollama`** — any local Ollama model (`model:` picks it, e.g.
+     `qwen2.5-coder:32b`, `gemma4:26b`). Ollama must be running; first run
+     warms the model. Source files cross the loopback boundary, so `base_url`
+     must be loopback or RFC1918. Heavy on small hosts — a 20B+ model needs a
+     box with real headroom.
+   Each lane's `name` is its scanner label / rule-id prefix, so it must be
+   unique. Aim for **two** lanes so cross-validation has something to compare.
+6. **Cross-validate prompt** (only if ≥2 lanes): `cross_validate.enabled`
+   — default true. **Surface:** each finding is reviewed by a different lane;
+   reduces false positives but adds an LLM call per finding.
 7. **Triage prompt:** `triage.enabled: true/false` — default false.
    - If true, sub-prompts: `intro_enabled` (default true, cheap),
      `prose_enabled` (default false, 1 call per finding), `fuzzy_dup_enabled`
@@ -313,12 +315,12 @@ These are non-negotiable.
   diff and confirmed before writing.
 - **NEVER `pipx install` or `pip upgrade` the tool for the user.** Surface
   the command; let them run it. Package installs touch their Python env.
-- **Refuse non-loopback `gemma.base_url`.** Source content over a public
-  boundary is a policy violation. The tool refuses too; the skill catches it
-  earlier with a clearer message.
-- **Refuse to run with every lane off** (`scanners.codex`, `scanners.claude`
-  and `scanners.gemma` all false). Stop at Phase 3; tell the user to enable
-  at least one lane (two for cross-validation to do anything).
+- **Refuse a non-loopback `base_url` on any `ollama` lane.** Source content
+  over a public boundary is a policy violation. The tool refuses too; the
+  skill catches it earlier with a clearer message.
+- **Refuse to run with no lanes** (`lanes:` empty and no legacy `scanners:`
+  to migrate). Stop at Phase 3; tell the user to configure at least one lane
+  (two for cross-validation to do anything).
 - **The Projects v2 board is the source of triage truth.** Don't try to
   dedup findings yourself; that's the tool's job (deterministic
   fingerprints in the issue body, byte-identical to the static lane's).
@@ -348,7 +350,7 @@ lockfile); leaving it out lets each developer track their own install.
 | `claude CLI not on PATH` | claude CLI isn't installed | install Claude Code; run `claude` once to log in (subscription) |
 | `claude` lane bills the API instead of the subscription | `ANTHROPIC_API_KEY` set in env | unset it so `claude` uses the OAuth subscription session |
 | `Ollama unreachable at http://localhost:11434` | Ollama not running | start Ollama daemon |
-| `Refusing to send source to non-local Ollama` | `gemma.base_url` is a public host | set to `http://localhost:11434` |
+| `Refusing to send source to non-local Ollama` | an `ollama` lane's `base_url` is a public host | set to `http://localhost:11434` |
 | `SOCKET_API_KEY env unset` | (this is the static lane's job, not this skill's) | this skill doesn't use Socket; see `/leverj:security-scan` |
 | Findings double-filed across substrates | mismatched fingerprint scheme | open an issue — the fingerprint MUST be byte-identical between substrates |
 

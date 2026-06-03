@@ -91,6 +91,7 @@ _SYSTEM_PROMPT = (
 
 def run(
     repo_dir: Path,
+    scanner: str = "gemma",
     base_url: str = "http://host.docker.internal:11434",
     model: str = "gemma4:26b",
     keep_alive: str = "5m",
@@ -100,15 +101,17 @@ def run(
     max_total_bytes: int = 200_000,
     exclude: list[str] | None = None,
 ) -> RunnerResult:
-    """Walk `repo_dir`, batch source files into a single Gemma prompt, parse the JSON.
+    """Walk `repo_dir`, batch source files into one Ollama prompt, parse the JSON.
+
+    `scanner` is the lane name — it labels the RunnerResult and namespaces rule
+    ids. The backend is any Ollama model (not just gemma); `model` picks it.
 
     Returns a SARIF dict on success; on any HTTP/parse failure returns completed=False
     with a short error string. Like every other runner, partial failure contributes
     zero findings — never blanket "all clear".
     """
     if not is_local_url(base_url):
-        return RunnerResult(
-            "gemma", None, False,
+        return RunnerResult(scanner, None, False,
             f"refusing to send source to non-local Ollama at {base_url!r}; "
             "set gemma.base_url to a loopback/private host",
         )
@@ -116,7 +119,7 @@ def run(
     files = _select_files(repo_dir, exclude or [], max_files, max_file_bytes, max_total_bytes)
     if not files:
         # Empty repo or all files filtered out — treat as a no-op success.
-        return RunnerResult("gemma", _empty_sarif(), True, None)
+        return RunnerResult(scanner, _empty_sarif(), True, None)
 
     user_content = _build_user_prompt(files, repo_dir)
 
@@ -136,24 +139,24 @@ def run(
             timeout=timeout,
         )
     except requests.RequestException as e:
-        return RunnerResult("gemma", None, False, f"ollama unreachable: {e}")
+        return RunnerResult(scanner, None, False, f"ollama unreachable: {e}")
 
     if r.status_code >= 400:
-        return RunnerResult("gemma", None, False, f"ollama http {r.status_code}: {r.text[:200]}")
+        return RunnerResult(scanner, None, False, f"ollama http {r.status_code}: {redact_text(r.text[:200])}")
 
     try:
         body = r.json() or {}
         content = (body.get("message") or {}).get("content") or ""
         data = json.loads(content) if content else {}
     except (ValueError, json.JSONDecodeError) as e:
-        return RunnerResult("gemma", None, False, f"parse error: {e}")
+        return RunnerResult(scanner, None, False, f"parse error: {e}")
 
     raw_findings = data.get("findings") if isinstance(data, dict) else None
     if not isinstance(raw_findings, list):
-        return RunnerResult("gemma", None, False, "output schema mismatch: 'findings' not a list")
+        return RunnerResult(scanner, None, False, "output schema mismatch: 'findings' not a list")
 
-    sarif = _to_sarif(raw_findings)
-    return RunnerResult("gemma", sarif, True, None)
+    sarif = _to_sarif(raw_findings, scanner)
+    return RunnerResult(scanner, sarif, True, None)
 
 
 def _select_files(
@@ -266,7 +269,7 @@ def _empty_sarif() -> dict:
     }
 
 
-def _to_sarif(findings: list[dict]) -> dict:
+def _to_sarif(findings: list[dict], scanner: str = "gemma") -> dict:
     rules: list[dict] = []
     results: list[dict] = []
     seen: dict[str, dict] = {}
@@ -277,8 +280,8 @@ def _to_sarif(findings: list[dict]) -> dict:
         sev = str(f.get("severity") or "medium").lower()
         if sev not in _SEVERITY_TO_NUMERIC:
             sev = "medium"
-        rid_raw = str(f.get("rule_id") or "gemma-finding").strip()
-        rid = rid_raw if rid_raw.startswith("gemma.") else f"gemma.{rid_raw}"
+        rid_raw = str(f.get("rule_id") or f"{scanner}-finding").strip()
+        rid = rid_raw if rid_raw.startswith(f"{scanner}.") else f"{scanner}.{rid_raw}"
         title = str(f.get("title") or rid).strip()
         message = str(f.get("message") or "").strip()
         file_path = str(f.get("file") or "").strip()
@@ -297,7 +300,7 @@ def _to_sarif(findings: list[dict]) -> dict:
                 "name": title,
                 "properties": {
                     "security-severity": _SEVERITY_TO_NUMERIC[sev],
-                    "scanner": "gemma",
+                    "scanner": scanner,
                 },
             }
             seen[rid] = entry
@@ -310,7 +313,7 @@ def _to_sarif(findings: list[dict]) -> dict:
             "properties": {
                 "title": title,
                 "security-severity": _SEVERITY_TO_NUMERIC[sev],
-                "scanner": "gemma",
+                "scanner": scanner,
             },
             "locations": [{
                 "physicalLocation": {
@@ -326,7 +329,7 @@ def _to_sarif(findings: list[dict]) -> dict:
     return {
         "version": "2.1.0",
         "runs": [{
-            "tool": {"driver": {"name": "gemma", "rules": rules}},
+            "tool": {"driver": {"name": scanner, "rules": rules}},
             "results": results,
         }],
     }

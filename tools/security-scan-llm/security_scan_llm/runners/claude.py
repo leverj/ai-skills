@@ -15,12 +15,13 @@ existing normalize.py pipeline consumes it like any other scanner.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
 
-from . import RunnerResult
+from security_scan_llm.redact import redact_text
+
+from . import RunnerResult, agent_env
 from .codex import _PROMPT, _SCHEMA, _to_sarif
 
 # Read-only toolset the agent is allowed to use during the audit. No Bash/Edit/
@@ -30,12 +31,16 @@ _ALLOWED_TOOLS = ("Read", "Grep", "Glob")
 
 def run(
     repo_dir: Path,
+    scanner: str = "claude",
     binary: str = "claude",
     model: str | None = None,
     timeout: int = 1200,
     extra_args: list[str] | None = None,
 ) -> RunnerResult:
     """Invoke claude on `repo_dir` and return its findings as a SARIF doc.
+
+    `scanner` is the lane name — it labels the RunnerResult and namespaces
+    rule ids (so a lane named `audit` files `audit.*`).
 
     Failure modes (all return completed=False with a clear error string):
       - binary missing on PATH
@@ -44,7 +49,7 @@ def run(
       - schema enforcement fails (no `findings` key)
     """
     if shutil.which(binary) is None:
-        return RunnerResult("claude", None, False, f"binary not found: {binary}")
+        return RunnerResult(scanner, None, False, f"binary not found: {binary}")
 
     cmd = [
         binary, "-p",
@@ -68,27 +73,27 @@ def run(
             text=True,
             timeout=timeout,
             check=False,
-            env={**os.environ},
+            env=agent_env(),
         )
     except subprocess.TimeoutExpired:
-        return RunnerResult("claude", None, False, f"timeout after {timeout}s")
+        return RunnerResult(scanner, None, False, f"timeout after {timeout}s")
     except FileNotFoundError:
-        return RunnerResult("claude", None, False, f"binary not found: {binary}")
+        return RunnerResult(scanner, None, False, f"binary not found: {binary}")
     except Exception as e:
-        return RunnerResult("claude", None, False, f"{type(e).__name__}: {e}")
+        return RunnerResult(scanner, None, False, f"{type(e).__name__}: {e}")
 
     if r.returncode != 0:
-        err = (r.stderr or r.stdout or "").strip()
-        return RunnerResult("claude", None, False, f"exit {r.returncode}: {err[:300]}")
+        err = redact_text((r.stderr or r.stdout or "").strip())
+        return RunnerResult(scanner, None, False, f"exit {r.returncode}: {err[:300]}")
 
     try:
         envelope = json.loads(r.stdout or "{}")
     except json.JSONDecodeError as e:
-        return RunnerResult("claude", None, False, f"output parse error: {e}")
+        return RunnerResult(scanner, None, False, f"output parse error: {e}")
 
     if envelope.get("is_error"):
         return RunnerResult(
-            "claude", None, False,
+            scanner, None, False,
             f"claude reported error: {str(envelope.get('result'))[:200]}",
         )
 
@@ -97,13 +102,13 @@ def run(
         denials = envelope.get("permission_denials") or []
         if denials:
             return RunnerResult(
-                "claude", None, False,
+                scanner, None, False,
                 f"claude blocked by tool-permission denials: {denials[:3]}",
             )
-        return RunnerResult("claude", None, False, "claude produced no structured_output")
+        return RunnerResult(scanner, None, False, "claude produced no structured_output")
 
     findings = structured.get("findings") or []
     if not isinstance(findings, list):
-        return RunnerResult("claude", None, False, "output schema mismatch: 'findings' not a list")
+        return RunnerResult(scanner, None, False, "output schema mismatch: 'findings' not a list")
 
-    return RunnerResult("claude", _to_sarif(findings, "claude"), True, None)
+    return RunnerResult(scanner, _to_sarif(findings, scanner), True, None)

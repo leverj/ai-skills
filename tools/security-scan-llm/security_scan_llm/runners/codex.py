@@ -12,13 +12,14 @@ pipeline can consume it like any other scanner.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
-from . import RunnerResult
+from security_scan_llm.redact import redact_text
+
+from . import RunnerResult, agent_env
 
 # Map our severity vocabulary to a numeric security-severity used by the SARIF
 # normalizer (it expects CVSS-style numerics under properties.security-severity).
@@ -113,12 +114,16 @@ Return ONLY the JSON object matching the supplied schema. No prose, no preamble.
 
 def run(
     repo_dir: Path,
+    scanner: str = "codex",
     binary: str = "codex",
     model: str | None = None,
     timeout: int = 1200,
     extra_args: list[str] | None = None,
 ) -> RunnerResult:
     """Invoke codex on `repo_dir` and return its findings as a SARIF doc.
+
+    `scanner` is the lane name — it labels the RunnerResult and namespaces
+    rule ids (so a lane named `audit` files `audit.*`).
 
     Failure modes (all return completed=False with a clear error string):
       - binary missing on PATH
@@ -131,7 +136,7 @@ def run(
     modify the cloned repo, and `--ephemeral` so no session metadata persists.
     """
     if shutil.which(binary) is None:
-        return RunnerResult("codex", None, False, f"binary not found: {binary}")
+        return RunnerResult(scanner, None, False, f"binary not found: {binary}")
 
     with tempfile.TemporaryDirectory(prefix="codex-security_scan-") as td:
         schema_path = Path(td) / "schema.json"
@@ -162,27 +167,26 @@ def run(
                 text=True,
                 timeout=timeout,
                 check=False,
-                # Don't inherit security_scan's env wholesale — keep CODEX_HOME etc., but
-                # strip anything that might confuse the agent. Codex reads its own
-                # config from ~/.codex/.
-                env={**os.environ},
+                # Strip the GitHub PAT from the agent's env (it only needs its own
+                # ~/.codex auth). Codex reads its config from ~/.codex/.
+                env=agent_env(),
             )
         except subprocess.TimeoutExpired:
-            return RunnerResult("codex", None, False, f"timeout after {timeout}s")
+            return RunnerResult(scanner, None, False, f"timeout after {timeout}s")
         except FileNotFoundError:
-            return RunnerResult("codex", None, False, f"binary not found: {binary}")
+            return RunnerResult(scanner, None, False, f"binary not found: {binary}")
         except Exception as e:
-            return RunnerResult("codex", None, False, f"{type(e).__name__}: {e}")
+            return RunnerResult(scanner, None, False, f"{type(e).__name__}: {e}")
 
         if r.returncode != 0:
-            err = (r.stderr or r.stdout or "").strip()
+            err = redact_text((r.stderr or r.stdout or "").strip())
             # Detect auth failure (most common user-actionable error) and surface clearly.
             if "not logged in" in err.lower() or "auth" in err.lower():
                 return RunnerResult(
-                    "codex", None, False,
+                    scanner, None, False,
                     "codex auth failed — run `codex login` first",
                 )
-            return RunnerResult("codex", None, False, f"exit {r.returncode}: {err[:300]}")
+            return RunnerResult(scanner, None, False, f"exit {r.returncode}: {err[:300]}")
 
         if not output_path.is_file():
             return RunnerResult(
@@ -193,14 +197,14 @@ def run(
         try:
             data = json.loads(output_path.read_text() or "{}")
         except json.JSONDecodeError as e:
-            return RunnerResult("codex", None, False, f"output parse error: {e}")
+            return RunnerResult(scanner, None, False, f"output parse error: {e}")
 
     findings = data.get("findings") or []
     if not isinstance(findings, list):
-        return RunnerResult("codex", None, False, "output schema mismatch: 'findings' not a list")
+        return RunnerResult(scanner, None, False, "output schema mismatch: 'findings' not a list")
 
-    sarif = _to_sarif(findings)
-    return RunnerResult("codex", sarif, True, None)
+    sarif = _to_sarif(findings, scanner)
+    return RunnerResult(scanner, sarif, True, None)
 
 
 def _to_sarif(findings: list[dict], scanner: str = "codex") -> dict:

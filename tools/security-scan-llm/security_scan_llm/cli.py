@@ -19,7 +19,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from security_scan_llm.config import Config, ConfigError, load_config
+from security_scan_llm.config import Config, ConfigError, LaneConfig, load_config
 from security_scan_llm.cross_validate import cross_validate
 from security_scan_llm.github import GitHub, GitHubError
 from security_scan_llm.models import Finding
@@ -54,14 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    if not (cfg.scanners.codex or cfg.scanners.claude or cfg.scanners.gemma):
-        print(
-            "error: no LLM lane enabled — set at least one of "
-            "scanners.codex / scanners.claude / scanners.gemma in config-llm.yaml",
-            file=sys.stderr,
-        )
-        return 2
-
+    # load_config validates that at least one lane is configured (else ConfigError above).
     return run(cfg, repo_dir=args.repo_dir, dry_run=args.dry_run, work_dir=args.work_dir, keep_work=args.keep_work)
 
 
@@ -99,66 +92,20 @@ def run(
         completed: list[str] = []
         failed: list[tuple[str, str]] = []
 
-        if cfg.scanners.codex:
-            print("scan: codex", file=sys.stderr)
-            r = codex_runner.run(
-                target,
-                binary=cfg.codex.binary,
-                model=cfg.codex.model,
-                timeout=cfg.codex.timeout,
-            )
+        for lane in cfg.lanes:
+            print(f"scan: {lane.name} ({lane.backend})", file=sys.stderr)
+            r = _run_lane(lane, target, cfg.paths.exclude)
             _absorb(r, findings, completed, failed)
 
-        if cfg.scanners.claude:
-            print("scan: claude", file=sys.stderr)
-            r = claude_runner.run(
-                target,
-                binary=cfg.claude.binary,
-                model=cfg.claude.model,
-                timeout=cfg.claude.timeout,
-            )
-            _absorb(r, findings, completed, failed)
-
-        if cfg.scanners.gemma:
-            print("scan: gemma", file=sys.stderr)
-            r = gemma_runner.run(
-                target,
-                base_url=cfg.gemma.base_url,
-                model=cfg.gemma.model,
-                keep_alive=cfg.gemma.keep_alive,
-                timeout=cfg.gemma.timeout,
-                max_files=cfg.gemma.max_files,
-                max_file_bytes=cfg.gemma.max_file_bytes,
-                max_total_bytes=cfg.gemma.max_total_bytes,
-                exclude=cfg.paths.exclude,
-            )
-            _absorb(r, findings, completed, failed)
-
-        llm_lanes_done = [s for s in completed if s in ("codex", "claude", "gemma")]
-        if cfg.cross_validate.enabled and len(llm_lanes_done) >= 2:
-            before = sum(1 for f in findings if f.scanner in ("codex", "claude", "gemma"))
+        completed_lanes = [ln for ln in cfg.lanes if ln.name in completed]
+        if cfg.cross_validate.enabled and len(completed_lanes) >= 2:
+            before = sum(1 for f in findings if f.scanner in completed)
             print(
-                f"cross-validate: reviewing {before} LLM finding(s) across "
-                f"{', '.join(llm_lanes_done)}",
+                f"cross-validate: reviewing {before} finding(s) across "
+                f"{', '.join(ln.name for ln in completed_lanes)}",
                 file=sys.stderr,
             )
-            cross_validate(
-                findings,
-                repo_dir=target,
-                codex_enabled="codex" in llm_lanes_done,
-                claude_enabled="claude" in llm_lanes_done,
-                gemma_enabled="gemma" in llm_lanes_done,
-                codex_binary=cfg.codex.binary,
-                codex_model=cfg.codex.model,
-                codex_timeout=cfg.cross_validate.codex_timeout,
-                claude_binary=cfg.claude.binary,
-                claude_model=cfg.claude.model,
-                claude_timeout=cfg.cross_validate.claude_timeout,
-                ollama_url=cfg.gemma.base_url,
-                gemma_model=cfg.gemma.model,
-                gemma_keep_alive=cfg.gemma.keep_alive,
-                gemma_timeout=cfg.cross_validate.gemma_timeout,
-            )
+            cross_validate(findings, repo_dir=target, lanes=completed_lanes)
 
         triage = _maybe_triage(cfg)
 
@@ -202,6 +149,29 @@ def run(
             shutil.rmtree(target, ignore_errors=True)
             if work_dir is None and work_root.exists():
                 shutil.rmtree(work_root, ignore_errors=True)
+
+
+def _run_lane(lane: LaneConfig, target: Path, exclude: list[str]) -> RunnerResult:
+    """Dispatch a lane to its backend runner. Unknown backend fails soft."""
+    if lane.backend == "codex-cli":
+        return codex_runner.run(
+            target, scanner=lane.name, binary=lane.binary or "codex",
+            model=lane.model, timeout=lane.timeout,
+        )
+    if lane.backend == "claude-cli":
+        return claude_runner.run(
+            target, scanner=lane.name, binary=lane.binary or "claude",
+            model=lane.model, timeout=lane.timeout,
+        )
+    if lane.backend == "ollama":
+        return gemma_runner.run(
+            target, scanner=lane.name, base_url=lane.base_url,
+            model=lane.model or "gemma4:26b", keep_alive=lane.keep_alive,
+            timeout=lane.timeout, max_files=lane.max_files,
+            max_file_bytes=lane.max_file_bytes, max_total_bytes=lane.max_total_bytes,
+            exclude=exclude,
+        )
+    return RunnerResult(lane.name, None, False, f"unknown backend: {lane.backend}")
 
 
 def _absorb(r: RunnerResult, findings: list[Finding], completed: list[str], failed: list[tuple[str, str]]) -> None:
