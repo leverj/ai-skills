@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Agent skills bundle for AI coding tools",
-    "version": "0.5.0"
+    "version": "0.5.1"
   },
   "plugins": [
     {
