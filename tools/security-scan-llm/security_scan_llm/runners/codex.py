@@ -203,11 +203,12 @@ def run(
     return RunnerResult("codex", sarif, True, None)
 
 
-def _to_sarif(findings: list[dict]) -> dict:
-    """Translate codex's JSON to the SARIF shape normalize.py expects.
+def _to_sarif(findings: list[dict], scanner: str = "codex") -> dict:
+    """Translate an LLM runner's JSON to the SARIF shape normalize.py expects.
 
-    rule_id is namespaced with `codex.` so it never collides with semgrep /
-    osv / trivy rule ids in fingerprints or labels.
+    rule_id is namespaced with `<scanner>.` so it never collides with semgrep /
+    osv / trivy rule ids in fingerprints or labels. Shared by the codex and
+    claude runners — both emit the same findings shape.
     """
     rules: list[dict] = []
     results: list[dict] = []
@@ -220,7 +221,7 @@ def _to_sarif(findings: list[dict]) -> dict:
         if sev not in _SEVERITY_TO_NUMERIC:
             sev = "medium"
         rid_raw = str(f.get("rule_id") or "codex-finding").strip()
-        rid = rid_raw if rid_raw.startswith("codex.") else f"codex.{rid_raw}"
+        rid = rid_raw if rid_raw.startswith(f"{scanner}.") else f"{scanner}.{rid_raw}"
         title = str(f.get("title") or rid).strip()
         message = str(f.get("message") or "").strip()
         file_path = str(f.get("file") or "").strip()
@@ -241,7 +242,7 @@ def _to_sarif(findings: list[dict]) -> dict:
                 "name": title,
                 "properties": {
                     "security-severity": _SEVERITY_TO_NUMERIC[sev],
-                    "scanner": "codex",
+                    "scanner": scanner,
                 },
             }
             seen_rules[rid] = rule_entry
@@ -254,7 +255,7 @@ def _to_sarif(findings: list[dict]) -> dict:
             "properties": {
                 "title": title,
                 "security-severity": _SEVERITY_TO_NUMERIC[sev],
-                "scanner": "codex",
+                "scanner": scanner,
             },
             "locations": [{
                 "physicalLocation": {
@@ -270,7 +271,7 @@ def _to_sarif(findings: list[dict]) -> dict:
     return {
         "version": "2.1.0",
         "runs": [{
-            "tool": {"driver": {"name": "codex", "rules": rules}},
+            "tool": {"driver": {"name": scanner, "rules": rules}},
             "results": results,
         }],
     }

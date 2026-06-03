@@ -19,13 +19,14 @@
 #    paths, slack, github_token_env) are duplicated rather than imported —
 #    each tool owns its own contract.
 
-version: "0.1.0"
+version: "0.2.0"
 config_schema_version: 1
 tool_name: "security-scan-llm"
 released: "2026-06-03"
 
 # One-liners for the upgrade prompt the skill shows users.
 changelog:
+  - "0.2.0: add the Claude SAST lane (`scanners.claude`, uses the local `claude` CLI on a Max/Pro subscription) and make cross-validation lane-agnostic — any two of codex/claude/gemma now review each other. Fixes codex strict-output-schema and a normalize arg-order crash that previously blocked the LLM lanes from filing."
   - "0.1.0: initial release. Host-side LLM lane (codex + gemma + bidirectional cross-validation) for the leverj security-scan pipeline. Reads `<repo>/.security-scan/config-llm.yaml`. Files findings into the same Projects v2 board as the deterministic container, dedup'd via a byte-identical fingerprint scheme."
 
 breaking_changes: []
@@ -55,6 +56,9 @@ config:
     - path: "scanners.codex"
       default: false
       note: "Enable OpenAI Codex SAST (uses local `codex` CLI subscription)."
+    - path: "scanners.claude"
+      default: false
+      note: "Enable Anthropic Claude SAST (uses local `claude` CLI on a Max/Pro subscription)."
     - path: "scanners.gemma"
       default: false
       note: "Enable local Gemma SAST via Ollama."
@@ -64,6 +68,12 @@ config:
         model: null
         timeout: 1200
       note: "Codex CLI tunables. Only used when scanners.codex is true."
+    - path: "claude"
+      default:
+        binary: "claude"
+        model: null
+        timeout: 1200
+      note: "Claude CLI tunables. Only used when scanners.claude is true. model null => the claude CLI default; set e.g. claude-sonnet-4-6 to pin."
     - path: "gemma"
       default:
         base_url: "http://localhost:11434"
@@ -78,8 +88,9 @@ config:
       default:
         enabled: true
         codex_timeout: 300
+        claude_timeout: 300
         gemma_timeout: 180
-      note: "When both scanners.codex AND scanners.gemma are true, each reviews the other's findings. False positives downgrade severity one notch; critical never auto-downgrades; findings are never suppressed."
+      note: "When at least two of scanners.codex/claude/gemma are true, each finding is reviewed by a different enabled lane. False positives downgrade severity one notch; critical never auto-downgrades; findings are never suppressed."
     - path: "triage"
       default:
         enabled: false

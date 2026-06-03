@@ -28,6 +28,7 @@ class ScannersConfig:
     invoking it with neither toggle on gets a clear error rather than a
     silent no-op."""
     codex: bool = False     # OpenAI Codex via local `codex` CLI (subscription)
+    claude: bool = False    # Anthropic Claude via local `claude` CLI (subscription)
     gemma: bool = False     # Local Gemma via Ollama
 
 
@@ -37,6 +38,15 @@ class CodexConfig:
     (ChatGPT subscription); the tool never sees an API key."""
     binary: str = "codex"
     model: str | None = None    # None => use codex's configured default
+    timeout: int = 1200         # seconds
+
+
+@dataclass
+class ClaudeConfig:
+    """Tunables for the local Claude CLI runner. Auth is `claude` OAuth login
+    (Max/Pro subscription); the tool never sees an API key."""
+    binary: str = "claude"
+    model: str | None = None    # None => use the claude CLI's configured default
     timeout: int = 1200         # seconds
 
 
@@ -54,10 +64,12 @@ class GemmaConfig:
 
 @dataclass
 class CrossValidateConfig:
-    """Bidirectional review: Codex reviews Gemma findings, Gemma reviews Codex.
-    No effect unless BOTH scanners.codex and scanners.gemma are enabled."""
+    """Bidirectional review: each LLM lane's findings are reviewed by a different
+    enabled lane (e.g. codex<->claude, codex<->gemma). No effect unless at least
+    TWO of scanners.codex / scanners.claude / scanners.gemma are enabled."""
     enabled: bool = True
     codex_timeout: int = 300
+    claude_timeout: int = 300
     gemma_timeout: int = 180
 
 
@@ -107,6 +119,7 @@ class Config:
     severity_floor: str
     slack: SlackConfig
     codex: CodexConfig = field(default_factory=CodexConfig)
+    claude: ClaudeConfig = field(default_factory=ClaudeConfig)
     gemma: GemmaConfig = field(default_factory=GemmaConfig)
     cross_validate: CrossValidateConfig = field(default_factory=CrossValidateConfig)
     triage: TriageConfig = field(default_factory=TriageConfig)
@@ -165,6 +178,7 @@ def _from_dict(raw: dict) -> Config:
     scanners_raw = raw.get("scanners") or {}
     scanners = ScannersConfig(
         codex=bool(scanners_raw.get("codex", False)),
+        claude=bool(scanners_raw.get("claude", False)),
         gemma=bool(scanners_raw.get("gemma", False)),
     )
 
@@ -173,6 +187,13 @@ def _from_dict(raw: dict) -> Config:
         binary=str(codex_raw.get("binary") or "codex"),
         model=(str(codex_raw.get("model")) if codex_raw.get("model") else None),
         timeout=int(codex_raw.get("timeout") or 1200),
+    )
+
+    claude_raw = raw.get("claude") or {}
+    claude_cfg = ClaudeConfig(
+        binary=str(claude_raw.get("binary") or "claude"),
+        model=(str(claude_raw.get("model")) if claude_raw.get("model") else None),
+        timeout=int(claude_raw.get("timeout") or 1200),
     )
 
     gemma_raw = raw.get("gemma") or {}
@@ -190,6 +211,7 @@ def _from_dict(raw: dict) -> Config:
     cv_cfg = CrossValidateConfig(
         enabled=bool(cv_raw.get("enabled", True)),
         codex_timeout=int(cv_raw.get("codex_timeout") or 300),
+        claude_timeout=int(cv_raw.get("claude_timeout") or 300),
         gemma_timeout=int(cv_raw.get("gemma_timeout") or 180),
     )
 
@@ -230,6 +252,7 @@ def _from_dict(raw: dict) -> Config:
         severity_floor=floor,
         slack=slack,
         codex=codex_cfg,
+        claude=claude_cfg,
         gemma=gemma_cfg,
         cross_validate=cv_cfg,
         triage=triage_cfg,

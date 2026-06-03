@@ -26,6 +26,7 @@ from security_scan_llm.models import Finding
 from security_scan_llm.normalize import normalize_sarif
 from security_scan_llm.notify import post_digest
 from security_scan_llm.runners import RunnerResult
+from security_scan_llm.runners import claude as claude_runner
 from security_scan_llm.runners import codex as codex_runner
 from security_scan_llm.runners import gemma as gemma_runner
 from security_scan_llm.sync import sync
@@ -53,8 +54,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    if not (cfg.scanners.codex or cfg.scanners.gemma):
-        print("error: neither scanners.codex nor scanners.gemma is enabled in config.yaml", file=sys.stderr)
+    if not (cfg.scanners.codex or cfg.scanners.claude or cfg.scanners.gemma):
+        print(
+            "error: no LLM lane enabled — set at least one of "
+            "scanners.codex / scanners.claude / scanners.gemma in config-llm.yaml",
+            file=sys.stderr,
+        )
         return 2
 
     return run(cfg, repo_dir=args.repo_dir, dry_run=args.dry_run, work_dir=args.work_dir, keep_work=args.keep_work)
@@ -104,6 +109,16 @@ def run(
             )
             _absorb(r, findings, completed, failed)
 
+        if cfg.scanners.claude:
+            print("scan: claude", file=sys.stderr)
+            r = claude_runner.run(
+                target,
+                binary=cfg.claude.binary,
+                model=cfg.claude.model,
+                timeout=cfg.claude.timeout,
+            )
+            _absorb(r, findings, completed, failed)
+
         if cfg.scanners.gemma:
             print("scan: gemma", file=sys.stderr)
             r = gemma_runner.run(
@@ -119,17 +134,26 @@ def run(
             )
             _absorb(r, findings, completed, failed)
 
-        if cfg.cross_validate.enabled and "codex" in completed and "gemma" in completed:
-            before = sum(1 for f in findings if f.scanner in ("codex", "gemma"))
-            print(f"cross-validate: reviewing {before} LLM finding(s) bidirectionally", file=sys.stderr)
+        llm_lanes_done = [s for s in completed if s in ("codex", "claude", "gemma")]
+        if cfg.cross_validate.enabled and len(llm_lanes_done) >= 2:
+            before = sum(1 for f in findings if f.scanner in ("codex", "claude", "gemma"))
+            print(
+                f"cross-validate: reviewing {before} LLM finding(s) across "
+                f"{', '.join(llm_lanes_done)}",
+                file=sys.stderr,
+            )
             cross_validate(
                 findings,
                 repo_dir=target,
-                codex_enabled=True,
-                gemma_enabled=True,
+                codex_enabled="codex" in llm_lanes_done,
+                claude_enabled="claude" in llm_lanes_done,
+                gemma_enabled="gemma" in llm_lanes_done,
                 codex_binary=cfg.codex.binary,
                 codex_model=cfg.codex.model,
                 codex_timeout=cfg.cross_validate.codex_timeout,
+                claude_binary=cfg.claude.binary,
+                claude_model=cfg.claude.model,
+                claude_timeout=cfg.cross_validate.claude_timeout,
                 ollama_url=cfg.gemma.base_url,
                 gemma_model=cfg.gemma.model,
                 gemma_keep_alive=cfg.gemma.keep_alive,
