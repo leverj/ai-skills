@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "security-scan-llm"
-version = "0.1.0"
-description = "Host-side LLM SAST lanes (codex + gemma) for the leverj security-scan pipeline. Files findings into the same Projects v2 board as the deterministic Action."
+version = "0.2.0"
+description = "Host-side LLM SAST lanes (codex + claude + gemma) for the leverj security-scan pipeline. Files findings into the same Projects v2 board as the deterministic Action."
 requires-python = ">=3.11"
 dependencies = [
     "PyYAML>=6.0",

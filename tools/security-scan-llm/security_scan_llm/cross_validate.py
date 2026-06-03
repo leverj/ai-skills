@@ -1,8 +1,10 @@
-"""Cross-validate Codex and Gemma findings.
+"""Cross-validate LLM findings across lanes (codex / claude / gemma).
 
-Each tool's findings are reviewed by the other:
-  - For every Codex finding → ask Gemma (via Ollama): "real issue?" → verdict.
-  - For every Gemma finding → ask Codex (via subprocess): "real issue?" → verdict.
+Each finding is reviewed by a DIFFERENT enabled lane than the one that produced
+it — a Codex finding is judged by Claude (or Gemma), a Claude finding by Codex,
+and so on. With any two lanes enabled you get a true bidirectional second
+opinion; the dispatch is lane-agnostic, so adding a lane only needs a verdict
+function plus an entry in the validator registry.
 
 Verdicts:
   - "real"           — validator agrees, keep severity as-is
@@ -15,16 +17,16 @@ The verdict + reason is written to `finding.extra["cross_validation"]` so the
 project board (and humans) see both opinions. Findings are NEVER suppressed —
 the project board is the single source of triage truth.
 
-Why each tool is good for what:
-  - Codex (cloud, ChatGPT subscription) is better at deep multi-file reasoning,
-    framework idioms, and subtle business-logic / auth bugs. Use it as the
-    primary depth scanner and as a "second opinion" on Gemma's flags.
-  - Gemma (local Ollama, free) is fast, has no quota, and is reliable at
-    pattern-shaped findings. Use it as the high-volume validator AND as a
-    pattern-scale primary scanner.
+Why each lane is good for what:
+  - Codex (cloud, ChatGPT subscription) and Claude (cloud, Max/Pro
+    subscription) are both strong at deep multi-file reasoning, framework
+    idioms, and subtle business-logic / auth bugs — each is an excellent
+    independent reviewer of the other's flags.
+  - Gemma (local Ollama, free) is fast and has no quota, but is heavy on a
+    small host; it's the optional third lane when hardware allows.
 
-So when both are enabled: Codex is the heavyweight detective, Gemma is the
-fast peer reviewer. Each catches the other's blind spots.
+Two cloud lanes catch each other's blind spots while keeping source on the
+user's subscription rather than a metered API.
 """
 
 from __future__ import annotations
@@ -73,16 +75,34 @@ can't see, or describes a generic best-practice without exploit impact,
 mark it false_positive. If you genuinely can't tell from the excerpt, say
 uncertain. Otherwise: real."""
 
+# Strict structured-output schema for a verdict, shared by the codex and claude
+# validators. Both OpenAI (codex `--output-schema`) and Anthropic (claude
+# `--json-schema`) reject the request unless every object sets
+# additionalProperties:false and lists every property key in `required`.
+_VERDICT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["verdict", "reason"],
+    "properties": {
+        "verdict": {"type": "string", "enum": ["real", "false_positive", "uncertain"]},
+        "reason": {"type": "string"},
+    },
+}
+
 
 def cross_validate(
     findings: list[Finding],
     *,
     repo_dir: Path,
-    codex_enabled: bool,
-    gemma_enabled: bool,
+    codex_enabled: bool = False,
+    claude_enabled: bool = False,
+    gemma_enabled: bool = False,
     codex_binary: str = "codex",
     codex_model: str | None = None,
     codex_timeout: int = 300,
+    claude_binary: str = "claude",
+    claude_model: str | None = None,
+    claude_timeout: int = 300,
     ollama_url: str = "http://host.docker.internal:11434",
     gemma_model: str = "gemma4:26b",
     gemma_keep_alive: str = "5m",
@@ -91,41 +111,52 @@ def cross_validate(
     """Mutate `findings` in place with a `cross_validation` extra and possibly
     a downgraded severity. Returns the same list for convenience.
 
-    Both tools must be enabled for cross-validation to do anything meaningful —
-    if only one ran, there's nothing to compare against. If both ran but one
-    is unreachable at validation time we silently skip that direction.
+    Needs at least two reachable validators — with one lane there is nothing to
+    compare against. A finding is validated by the first available lane whose
+    name differs from its own scanner. Lanes that are enabled but unreachable
+    at validation time are silently dropped from the registry.
     """
-    if not (codex_enabled and gemma_enabled):
-        return findings
+    # Registry of reachable validators: scanner-name -> fn(finding)->(verdict,reason).
+    validators = {}
 
-    codex_available = shutil.which(codex_binary) is not None
-    # Defence-in-depth: even though redact_text scrubs known-token shapes from
-    # snippets, refuse to use the Gemma direction at all if base_url isn't
-    # local. Cross-validation pays out at the margin; sending source to a
-    # remote LLM does not.
-    if not is_local_url(ollama_url):
-        print(
-            f"cross-validate: gemma validator skipped — ollama_url {ollama_url!r} "
-            "is not loopback/private",
-            file=sys.stderr,
+    if codex_enabled and shutil.which(codex_binary) is not None:
+        validators["codex"] = lambda f: _codex_verdict(
+            f, repo_dir=repo_dir, binary=codex_binary,
+            model=codex_model, timeout=codex_timeout,
         )
-        gemma_reachable = False
-    else:
-        gemma_reachable = _ping_ollama(ollama_url)
-
-    for f in findings:
-        if f.scanner == "codex" and gemma_reachable:
-            verdict, reason = _gemma_verdict(
+    if claude_enabled and shutil.which(claude_binary) is not None:
+        validators["claude"] = lambda f: _claude_verdict(
+            f, repo_dir=repo_dir, binary=claude_binary,
+            model=claude_model, timeout=claude_timeout,
+        )
+    if gemma_enabled:
+        # Defence-in-depth: even though redact_text scrubs known-token shapes
+        # from snippets, refuse the Gemma direction if base_url isn't local.
+        # Cross-validation pays out at the margin; a remote round-trip of
+        # source does not.
+        if not is_local_url(ollama_url):
+            print(
+                f"cross-validate: gemma validator skipped — ollama_url {ollama_url!r} "
+                "is not loopback/private",
+                file=sys.stderr,
+            )
+        elif _ping_ollama(ollama_url):
+            validators["gemma"] = lambda f: _gemma_verdict(
                 f, repo_dir=repo_dir, url=ollama_url, model=gemma_model,
                 keep_alive=gemma_keep_alive, timeout=gemma_timeout,
             )
-            _apply_verdict(f, validator="gemma", verdict=verdict, reason=reason)
-        elif f.scanner == "gemma" and codex_available:
-            verdict, reason = _codex_verdict(
-                f, repo_dir=repo_dir, binary=codex_binary,
-                model=codex_model, timeout=codex_timeout,
-            )
-            _apply_verdict(f, validator="codex", verdict=verdict, reason=reason)
+
+    if len(validators) < 2:
+        return findings
+
+    # Deterministic preference when more than one other lane could validate.
+    order = [name for name in ("codex", "claude", "gemma") if name in validators]
+    for f in findings:
+        validator = next((name for name in order if name != f.scanner), None)
+        if validator is None:
+            continue
+        verdict, reason = validators[validator](f)
+        _apply_verdict(f, validator=validator, verdict=verdict, reason=reason)
     return findings
 
 
@@ -204,14 +235,7 @@ def _codex_verdict(
     with tempfile.TemporaryDirectory(prefix="codex-validate-") as td:
         schema = Path(td) / "schema.json"
         out = Path(td) / "out.json"
-        schema.write_text(json.dumps({
-            "type": "object",
-            "required": ["verdict", "reason"],
-            "properties": {
-                "verdict": {"type": "string", "enum": ["real", "false_positive", "uncertain"]},
-                "reason": {"type": "string"},
-            },
-        }))
+        schema.write_text(json.dumps(_VERDICT_SCHEMA))
         cmd = [
             binary, "exec",
             "-s", "read-only",
@@ -241,6 +265,50 @@ def _codex_verdict(
             data = json.loads(out.read_text() or "{}")
         except json.JSONDecodeError:
             return ("uncertain", "validator parse error")
+    verdict = str((data or {}).get("verdict", "uncertain"))
+    reason = str((data or {}).get("reason", ""))
+    return (verdict, reason)
+
+
+# ---- Claude verdict (subprocess) ------------------------------------------
+
+
+def _claude_verdict(
+    f: Finding, *, repo_dir: Path, binary: str, model: str | None, timeout: int,
+) -> tuple[str, str]:
+    snippet = _read_snippet(repo_dir, f.file_path, f.line) or (f.extra or {}).get("snippet", "")
+    # Claude is a cloud LLM (Max/Pro subscription) — always redact before send.
+    prompt = _REVIEW_PROMPT.format(
+        finding_json=json.dumps(_finding_summary(f), indent=2),
+        snippet=redact_text(str(snippet))[:1200] or "(unavailable)",
+    )
+    cmd = [
+        binary, "-p",
+        "--output-format", "json",
+        "--json-schema", json.dumps(_VERDICT_SCHEMA),
+    ]
+    if model:
+        cmd += ["--model", model]
+    # Read-only tools so the validator can inspect the file for itself, parity
+    # with codex's `-s read-only -C <repo>`. Prompt is fed on stdin.
+    cmd += ["--allowedTools", "Read", "Grep", "Glob"]
+    try:
+        r = subprocess.run(
+            cmd, cwd=str(repo_dir), input=prompt, capture_output=True, text=True,
+            timeout=timeout, check=False, env={**os.environ},
+        )
+    except subprocess.TimeoutExpired:
+        return ("uncertain", "validator timeout")
+    except Exception as e:
+        print(f"cross-validate: claude review failed for {f.rule_id}: {e}", file=sys.stderr)
+        return ("uncertain", "validator unavailable")
+    if r.returncode != 0:
+        return ("uncertain", "validator failed")
+    try:
+        envelope = json.loads(r.stdout or "{}")
+    except json.JSONDecodeError:
+        return ("uncertain", "validator parse error")
+    data = envelope.get("structured_output") or {}
     verdict = str((data or {}).get("verdict", "uncertain"))
     reason = str((data or {}).get("reason", ""))
     return (verdict, reason)

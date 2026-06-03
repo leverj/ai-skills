@@ -8,7 +8,7 @@ description: >
   — pulls it and applies any new config-schema migrations declared in the
   image's SECURITY-SCAN-MANIFEST.yaml. Config lives at
   `<repo>/.security-scan/config.yaml` — repo-local, versioned with the repo.
-  LLM SAST (codex + gemma) is a SEPARATE concern handled by the
+  LLM SAST (codex + claude + gemma) is a SEPARATE concern handled by the
   `security-scan-llm` CLI under `tools/security-scan-llm/` — not orchestrated
   by this skill.
   Use when the user says "scan", "/security-scan", "run security-scan",
@@ -33,7 +33,7 @@ repo's config dir:
 Both files are versioned with the repo — config travels with the repo. No
 user-level (`~/.security-scan/`) state.
 
-LLM SAST (codex + gemma) is **out of scope** for this skill. It lives in a
+LLM SAST (codex + claude + gemma) is **out of scope** for this skill. It lives in a
 standalone CLI (`security-scan-llm`) under `tools/security-scan-llm/` with
 its own config at `<repo>/.security-scan/config-llm.yaml`. Both tools file
 into the same Projects v2 board with a byte-identical fingerprint scheme so

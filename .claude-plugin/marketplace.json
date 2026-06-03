@@ -11,7 +11,7 @@
   "plugins": [
     {
       "name": "leverj",
-      "description": "Leverj agent skills bundle. Includes: sprint (scrum/kanban workflow on GitHub Projects v2 — issues are requirements, Project fields are state, ADRs in .dev/decisions/); triage (end-to-end triage & fix loop over an epic's sub-issues or a GitHub Projects v2 board — auto-closes dup/wontfix, bundles trivial dep bumps into PRs); security-scan (drives the leverj/security-scan Docker image for deterministic scanning; config repo-local at <repo>/.security-scan/config.yaml); security-scan-llm (drives the host security-scan-llm CLI for Codex+Gemma SAST with bidirectional cross-validation; config repo-local at <repo>/.security-scan/config-llm.yaml). Both substrates file into the same GitHub Projects v2 board with byte-identical fingerprints.",
+      "description": "Leverj agent skills bundle. Includes: sprint (scrum/kanban workflow on GitHub Projects v2 — issues are requirements, Project fields are state, ADRs in .dev/decisions/); triage (end-to-end triage & fix loop over an epic's sub-issues or a GitHub Projects v2 board — auto-closes dup/wontfix, bundles trivial dep bumps into PRs); security-scan (drives the leverj/security-scan Docker image for deterministic scanning; config repo-local at <repo>/.security-scan/config.yaml); security-scan-llm (drives the host security-scan-llm CLI for Codex+Claude+Gemma SAST with lane-agnostic cross-validation; config repo-local at <repo>/.security-scan/config-llm.yaml). Both substrates file into the same GitHub Projects v2 board with byte-identical fingerprints.",
       "source": "./",
       "strict": false,
       "skills": [

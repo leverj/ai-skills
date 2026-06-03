@@ -18,6 +18,7 @@ _CATEGORY = {
     "gitleaks": "secret",
     "semgrep": "sast",
     "codex": "sast",
+    "claude": "sast",
     "gemma": "sast",
     "image": "image",
 }

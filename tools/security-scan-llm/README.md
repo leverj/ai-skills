@@ -1,7 +1,7 @@
 # security-scan-llm
 
-Host-side LLM SAST lanes (codex + gemma + bidirectional cross-validation)
-for the leverj security-scan pipeline.
+Host-side LLM SAST lanes (codex + claude + gemma + lane-agnostic
+cross-validation) for the leverj security-scan pipeline.
 
 Two ways to drive it:
 
@@ -10,7 +10,7 @@ Two ways to drive it:
 - **Via the Claude Code skill** [`/leverj:security-scan-llm`](../../skills/security-scan-llm/SKILL.md)
   — wraps this CLI with interactive setup, version-vs-manifest upgrade
   prompts, config-migration, and substrate health checks (codex login,
-  Ollama reachability). Use the skill when you want the same UX the
+  claude login, Ollama reachability). Use the skill when you want the same UX the
   static-lane skill provides; use the CLI for everything else.
 
 Sibling concern: the deterministic scanners live in the
@@ -24,6 +24,9 @@ substrates file into the **same** GitHub Projects v2 board with a
 - **`codex`** is a host-side CLI bound to the user's ChatGPT/Codex
   subscription. The container has no `codex` binary and no path to the
   user's session.
+- **`claude`** is a host-side CLI bound to the user's Claude Max/Pro
+  subscription (OAuth, no API key). Same story: no binary or session in
+  the container.
 - **`gemma`** talks to Ollama on the host (default `localhost:11434`).
   Source content never crosses the loopback boundary.
 
@@ -60,17 +63,21 @@ project:
 github_token_env: "GITHUB_TOKEN"   # PAT with repo + project scopes
 
 scanners:
-  codex: true        # opt-in
-  gemma: true        # opt-in
+  codex:  true        # opt-in (cloud, ChatGPT/Codex subscription)
+  claude: true        # opt-in (cloud, Claude Max/Pro subscription)
+  gemma:  false       # opt-in (local Ollama; heavy on small hosts)
 
 # Optional tunables (defaults shown — omit any you're happy with)
+codex:
+  binary: "codex"
+claude:
+  binary: "claude"
+  model:  "claude-sonnet-4-6"   # null => the claude CLI's default
 gemma:
   base_url: "http://localhost:11434"   # MUST be loopback or RFC1918
   model:    "gemma4:26b"
-codex:
-  binary: "codex"
 cross_validate:
-  enabled: true       # bidirectional review (only when both lanes on)
+  enabled: true       # each finding reviewed by a different lane (when ≥2 lanes on)
 triage:
   enabled: false      # gemma-driven issue prose / slack intro / fuzzy-dedup
 ```
@@ -92,9 +99,9 @@ Failure modes:
 
 | Cause | Behavior |
 |---|---|
-| `codex` binary missing / not logged in | That lane returns `completed=False`; the other lane continues. |
+| `codex` / `claude` binary missing or not logged in | That lane returns `completed=False`; the other lanes continue. |
 | Ollama unreachable at `gemma.base_url` | That lane returns `completed=False`. |
-| `scanners.codex` AND `scanners.gemma` both false | Exit 2 with a clear error — nothing to do. |
+| No LLM lane enabled (`scanners.codex` / `claude` / `gemma` all false) | Exit 2 with a clear error — nothing to do. |
 | GitHub PAT missing `project` scope | Exit 4 with the GitHub API error. |
 | All enabled lanes failed | Exit 3. |
 
