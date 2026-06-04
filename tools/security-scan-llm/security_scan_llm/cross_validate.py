@@ -31,12 +31,17 @@ user's subscription rather than a metered API.
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+# Cap on concurrent validator calls — each is a full LLM round-trip, so keep it
+# low enough not to hammer subscription rate limits.
+_MAX_XVAL_WORKERS = 4
 
 import requests
 
@@ -141,12 +146,27 @@ def cross_validate(
 
     # Deterministic preference (lanes order) when more than one lane could validate.
     order = [lane.name for lane in lanes if lane.name in validators]
+    tasks = []
     for f in findings:
         validator = next((name for name in order if name != f.scanner), None)
-        if validator is None:
-            continue
-        verdict, reason = validators[validator](f)
-        _apply_verdict(f, validator=validator, verdict=verdict, reason=reason)
+        if validator is not None:
+            tasks.append((f, validator))
+    if not tasks:
+        return findings
+
+    # Each validator call is a blocking subprocess / HTTP round-trip, so run them
+    # concurrently (bounded). Verdicts are applied in this thread as they land —
+    # each finding is distinct, so no shared-state races.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(_MAX_XVAL_WORKERS, len(tasks))) as pool:
+        futs = {pool.submit(validators[v], f): (f, v) for f, v in tasks}
+        for fut in concurrent.futures.as_completed(futs):
+            f, v = futs[fut]
+            try:
+                verdict, reason = fut.result()
+            except Exception as e:  # validators catch their own errors; this is a backstop
+                print(f"cross-validate: {v} review crashed for {f.rule_id}: {e}", file=sys.stderr)
+                verdict, reason = "uncertain", "validator error"
+            _apply_verdict(f, validator=v, verdict=verdict, reason=reason)
     return findings
 
 
@@ -182,11 +202,7 @@ def _ping_ollama(url: str) -> bool:
 def _gemma_verdict(
     f: Finding, *, repo_dir: Path, url: str, model: str, keep_alive: str, timeout: int,
 ) -> tuple[str, str]:
-    snippet = _read_snippet(repo_dir, f.file_path, f.line) or (f.extra or {}).get("snippet", "")
-    prompt = _REVIEW_PROMPT.format(
-        finding_json=json.dumps(_finding_summary(f), indent=2),
-        snippet=redact_text(str(snippet))[:1200] or "(unavailable)",
-    )
+    prompt = _verdict_prompt(f, repo_dir)
     try:
         r = requests.post(
             f"{url.rstrip('/')}/api/chat",
@@ -205,9 +221,7 @@ def _gemma_verdict(
     except (requests.RequestException, ValueError, json.JSONDecodeError) as e:
         print(f"cross-validate: gemma review failed for {f.rule_id}: {e}", file=sys.stderr)
         return ("uncertain", "validator unavailable")
-    verdict = str((data or {}).get("verdict", "uncertain"))
-    reason = str((data or {}).get("reason", ""))
-    return (verdict, reason)
+    return _verdict_from(data)
 
 
 # ---- Codex verdict (subprocess) -------------------------------------------
@@ -216,12 +230,7 @@ def _gemma_verdict(
 def _codex_verdict(
     f: Finding, *, repo_dir: Path, binary: str, model: str | None, timeout: int,
 ) -> tuple[str, str]:
-    snippet = _read_snippet(repo_dir, f.file_path, f.line) or (f.extra or {}).get("snippet", "")
-    # Codex is a cloud LLM (ChatGPT subscription) — always redact before send.
-    prompt = _REVIEW_PROMPT.format(
-        finding_json=json.dumps(_finding_summary(f), indent=2),
-        snippet=redact_text(str(snippet))[:1200] or "(unavailable)",
-    )
+    prompt = _verdict_prompt(f, repo_dir)
     with tempfile.TemporaryDirectory(prefix="codex-validate-") as td:
         schema = Path(td) / "schema.json"
         out = Path(td) / "out.json"
@@ -255,9 +264,7 @@ def _codex_verdict(
             data = json.loads(out.read_text() or "{}")
         except json.JSONDecodeError:
             return ("uncertain", "validator parse error")
-    verdict = str((data or {}).get("verdict", "uncertain"))
-    reason = str((data or {}).get("reason", ""))
-    return (verdict, reason)
+    return _verdict_from(data)
 
 
 # ---- Claude verdict (subprocess) ------------------------------------------
@@ -266,12 +273,7 @@ def _codex_verdict(
 def _claude_verdict(
     f: Finding, *, repo_dir: Path, binary: str, model: str | None, timeout: int,
 ) -> tuple[str, str]:
-    snippet = _read_snippet(repo_dir, f.file_path, f.line) or (f.extra or {}).get("snippet", "")
-    # Claude is a cloud LLM (Max/Pro subscription) — always redact before send.
-    prompt = _REVIEW_PROMPT.format(
-        finding_json=json.dumps(_finding_summary(f), indent=2),
-        snippet=redact_text(str(snippet))[:1200] or "(unavailable)",
-    )
+    prompt = _verdict_prompt(f, repo_dir)
     cmd = [
         binary, "-p",
         "--output-format", "json",
@@ -298,13 +300,26 @@ def _claude_verdict(
         envelope = json.loads(r.stdout or "{}")
     except json.JSONDecodeError:
         return ("uncertain", "validator parse error")
-    data = envelope.get("structured_output") or {}
-    verdict = str((data or {}).get("verdict", "uncertain"))
-    reason = str((data or {}).get("reason", ""))
-    return (verdict, reason)
+    return _verdict_from(envelope.get("structured_output"))
 
 
 # ---- helpers --------------------------------------------------------------
+
+
+def _verdict_prompt(f: Finding, repo_dir: Path) -> str:
+    """The redacted review prompt for one finding — shared by all validators.
+    Snippets/messages are redacted before they reach any LLM."""
+    snippet = _read_snippet(repo_dir, f.file_path, f.line) or (f.extra or {}).get("snippet", "")
+    return _REVIEW_PROMPT.format(
+        finding_json=json.dumps(_finding_summary(f), indent=2),
+        snippet=redact_text(str(snippet))[:1200] or "(unavailable)",
+    )
+
+
+def _verdict_from(data: dict | None) -> tuple[str, str]:
+    """Pull (verdict, reason) out of a validator's parsed JSON response."""
+    d = data or {}
+    return (str(d.get("verdict", "uncertain")), str(d.get("reason", "")))
 
 
 def _finding_summary(f: Finding) -> dict:
