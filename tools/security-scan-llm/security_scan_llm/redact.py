@@ -165,7 +165,10 @@ def is_local_url(url: str | None) -> bool:
         return False
     if host in {"localhost", "host.docker.internal"}:
         return True
-    if host.endswith(".local") or host.endswith(".internal"):
+    # `.local` is mDNS (link-local by design). A bare `.internal` suffix is NOT
+    # honored — `host.docker.internal` is already exact-matched above, and a
+    # broad suffix would accept attacker-controlled names like `exfil.evil.internal`.
+    if host.endswith(".local"):
         return True
     try:
         ip = ip_address(host)
