@@ -22,7 +22,7 @@ End-to-end workflow for working through the open issues of a long-lived GitHub b
 
 The skill is **generic over repo, epic, and project**; project-specific behavior is loaded from `.dev/triage.json` in the current repo. Everything downstream of enumeration — classification, cleanup, dep-bump bundling, PRs — is identical for both sources; only **how the work set is gathered** differs.
 
-Phases run top-to-bottom. Only **two** points pause for the user: Phase 3 (discuss `needs-you` items) and any time the devil's-advocate verifier raises a triaged-as-real concern. Phases 4 and 5 are autonomous — no commit / push / PR / merge / branch-delete approval gates inside the skill.
+Phases run top-to-bottom, autonomously. **Two points pause and wait for you:** Phase 1 step 2 (direction on any pre-existing `triage/*` PRs) and Phase 3 (directing `needs-you` items). Phases 4–5 never stop for commit / push / PR / merge / branch-delete approval. Everything else that needs your judgment is **surfaced without halting** and collected into the Phase 6 `⚡ DECIDE` block — a Phase-4 `[REAL]`-dropped bump, a non-mergeable PR left open. (A Phase-1 `[REAL]` is folded into the Phase 3 pause via a `needs-you` reclassification, not deferred to Phase 6.) See the [Output & escalation contract](#output--escalation-contract).
 
 ## The `source` concept
 
@@ -147,6 +147,37 @@ If `.dev/triage.json` is missing or malformed, exit with a clear error pointing 
 - **Commit subject only**, format `fix(deps): <short>` — no body unless one short product-level WHY sentence is genuinely needed. No email, no Co-Authored-By trailer, no Claude footer.
 - **The 5-check pre-commit gate is mandatory** before any commit (the `preCommitGate` agent if configured; otherwise run the checks individually).
 
+## Output & escalation contract
+
+This skill follows the same escalation and output discipline as the `sprint` skill — restated here self-contained, since triage runs independently.
+
+**Escalation — two independent axes.** Don't conflate them:
+- **Needs you?** → the output split: `⚡ DECIDE` (your call/action) vs `👀 SKIM` (already handled) vs `✓ DONE`.
+- **Does the run stop to wait?** → only a couple of points *halt*; most "needs-you" items are **surfaced without halting** and collected into the Phase 6 `⚡ DECIDE` block for you to act on afterward.
+
+**The only interactive pauses (run stops and waits):**
+- **Phase 1 step 2** — direction on any pre-existing `triage/*` PRs (resume vs. leave).
+- **Phase 3** — directing the `needs-you` items (the sprint **Tier-B** equivalent: breaking changes, ambiguous product intent, cross-repo fixes). Never auto-actioned.
+
+**`⚡ DECIDE` items surfaced *without* halting** (the run continues; you act after, from the Phase 6 block):
+- **A Phase-4 `[REAL]` finding** → the bump is **dropped** from the batch (never shipped on the verifier's doubt; safe bumps still ship) and reported for your call. *A Phase-1 `[REAL]` is different* — it **reclassifies the issue to `needs-you`**, so it's handled at the Phase 3 pause, not Phase 6.
+- **A non-mergeable PR** at ship time (`BLOCKED` / CI-failed / `UNSTABLE` / `BEHIND`-after-retries / other) → left open and reported; you must act (merge, fix CI, get review). Never bypassed.
+
+**Autonomous, no decision needed:**
+- **Trivial dep bumps + dup/wontfix cleanup = decide and log** (the **Tier-L** equivalent) — acted on and recorded in the Phase 6 summary.
+- Triage has **no "propose & proceed" (Tier-P) tier for issue/product decisions** — it never invents product / API / UX changes. When unsure, escalate; never guess on a human call.
+- **Safe defaults reported in `👀 SKIM`** (not `⚡ DECIDE`): **dropping a bump whose tests fail** during isolation, and **stopping a group whose tests won't pass**. (Distinct from a `[REAL]`-dropped bump, which is `⚡ DECIDE`.)
+
+**Output — DECIDE / SKIM / DONE.** The two interactive pauses above and the **final summary** (Phase 6) use this structure; intermediate progress recaps (Phase 1 triage table, Phase 2 cleanup recap) stay compact and are not reformatted. The blocks:
+
+```
+⚡ DECIDE — <items still needing your decision or action, or "nothing">
+👀 SKIM  — <already-dispositioned; review at leisure — your Phase-3 deferrals, test-failure-dropped bumps, stopped groups, deferred findings, or "nothing">
+✓ DONE   — <merged / closed counts, links; no action needed>
+```
+
+`⚡ DECIDE` is always first, even when empty (`⚡ DECIDE — nothing`). One line per item; link, don't inline. **A decision you already made (e.g. a Phase-3 "defer") is resolved — it belongs in `👀 SKIM`, not `⚡ DECIDE`.**
+
 ## Phase 1 — Triage (delegate heavy reads to a subagent)
 
 Gather the **work set** — the open issues to triage — and classify them. Route the heavy reading through an `Explore` subagent so only the classification table comes back to the main context.
@@ -219,9 +250,9 @@ Gather the **work set** — the open issues to triage — and classify them. Rou
 6. **Devil's-advocate verifier on the classification.** Spawn a `general-purpose` Agent with the full classification table and this prompt:
    > "I classified each issue as duplicate / wontfix / trivial / needs-you. Argue the counter-case for each non-needs-you entry — what would make it wrong? Be specific. Distinguish between (a) real concerns where the classification is likely wrong, (b) speculative concerns where there's a remote risk but no concrete evidence, and (c) style concerns. Return your output as a list with each concern tagged [REAL] / [SPECULATIVE] / [STYLE]."
 
-   Then: pause for the user's input **only** on `[REAL]` concerns. `[SPECULATIVE]` and `[STYLE]` go in the triage report but don't block the run. This prevents the verifier from stalling every invocation with low-confidence murmurs.
+   Then, for each `[REAL]` concern, **reclassify the affected issue to `needs-you`** so you direct it in Phase 3 — do not halt Phase 1 mid-run. `[SPECULATIVE]` and `[STYLE]` go in the triage report but change nothing. This keeps the classification honest without the verifier stalling every invocation with low-confidence murmurs.
 
-   **Tag-missing fallback:** if the verifier output contains no `[REAL]` / `[SPECULATIVE]` / `[STYLE]` tags at all (the verifier forgot the contract), treat every concern in its output as `[REAL]` and pause. Better to over-pause than to silently swallow a real concern that wasn't tagged.
+   **Tag-missing fallback:** if the verifier output contains no `[REAL]` / `[SPECULATIVE]` / `[STYLE]` tags at all (the verifier forgot the contract), treat every concern in its output as `[REAL]` and reclassify the affected issues to `needs-you`. Better to over-escalate to Phase 3 than to silently swallow a real concern that wasn't tagged.
 
 7. **Present the triage** to the user as a compact block:
    ```
@@ -256,7 +287,9 @@ Close duplicates and won't-fix issues with a one-line reason. Closing the underl
    Closed K issues: #..., #...
    ```
 
-## Phase 3 — Discuss `needs-you` items (THE pause)
+## Phase 3 — Discuss `needs-you` items (THE pause = the `⚡ DECIDE` block)
+
+This phase is the main interactive pause where you direct the `needs-you` items (see [Output & escalation contract](#output--escalation-contract)). Other `⚡ DECIDE` items — a Phase-4 `[REAL]`-dropped bump, a non-mergeable PR — do **not** halt here; they're surfaced in the Phase 6 summary. (The only other point that *waits* is Phase 1 step 2, on pre-existing PRs.) If there are no `needs-you` items, state `⚡ DECIDE — nothing` for this phase and continue.
 
 For each `needs-you` item present:
 - Issue # + one-line summary
@@ -293,7 +326,7 @@ For each PR-group:
 4. **Devil's-advocate verifier on the bumps actually being committed.** Spawn a `general-purpose` Agent with the diff and this prompt:
    > "These bumps were classified as trivial and tests pass. Argue why any of them is unsafe to merge — look for transitive breakage, semver lies, known-bad versions, lockfile drift, postinstall scripts in the new transitive deps. Tag each concern [REAL] / [SPECULATIVE] / [STYLE]."
 
-   Drop `[REAL]`-flagged bumps from this group; reset-and-replay; re-run tests. Document `[SPECULATIVE]` in the PR body.
+   A `[REAL]` finding does not halt the batch: **drop the flagged bump from this group** (never ship it on the verifier's doubt) — reset-and-replay, re-run tests, ship the rest — and **record it for the Phase 6 `⚡ DECIDE` block** so the developer can pursue it separately (see [Output & escalation contract](#output--escalation-contract) / [failure mode](#failure-modes)). It is reported, never silently discarded. Document `[SPECULATIVE]` concerns in the PR body and continue.
 5. **Run the configured `lintCommand`** for the ecosystem if set; must exit 0.
 6. **Pre-commit gate.** If `preCommitGate` is set in config, invoke that agent via the `Agent` tool:
    ```
@@ -343,7 +376,7 @@ For each PR pushed in Phase 4:
    gh pr view <N> --repo {owner}/{repo} --json mergeStateStatus,mergeable
    ```
    - `mergeStateStatus == "CLEAN"` → safe to merge.
-   - `mergeStateStatus == "BLOCKED"` → required reviewers / branch protection. **Stop this PR. Leave it open. Surface to the user.** Do not attempt to bypass.
+   - `mergeStateStatus == "BLOCKED"` → required reviewers / branch protection. **Stop this PR, leave it open, continue to the next group, and report it in the Phase 6 `⚡ DECIDE` block** (a non-mergeable PR needs you — it does not halt the run). Do not attempt to bypass.
    - `mergeStateStatus == "BEHIND"` → rebase and re-push, then re-check. **Cap at 3 rebase attempts** to prevent looping on a fast-moving base branch; after the 3rd "BEHIND," stop this PR and leave it open with a note.
    - `mergeStateStatus == "UNSTABLE"` → CI still flaky; treat as not-mergeable for this run.
    - Any other status → stop and surface.
@@ -365,17 +398,31 @@ For each PR pushed in Phase 4:
 
 6. **PushNotification** with the final summary. `PushNotification` is a deferred tool — load it via `ToolSearch` with `select:PushNotification` before calling.
 
-## Phase 6 — Final summary (always print)
+## Phase 6 — Final summary (always print, DECIDE / SKIM / DONE)
+
+Print in the three-block order per the [Output & escalation contract](#output--escalation-contract) — the developer reads `⚡ DECIDE` first and can stop there. Omit a block's rows when its count is 0, but always print the `⚡ DECIDE` header (as `⚡ DECIDE — nothing` when empty) so its emptiness is explicit.
 
 ```
 {sourceRef} triage complete.
-  closed as dup/wontfix:    X
-  PRs merged:               Y  (#<pr1>, #<pr2>, ...)
-  PRs left open:            Z  (#<pr3> reason: <CI flake | BLOCKED by reviewer | ...>)
-  deferred to user:         W  (issues: #..., #...)
-  dropped (test failure):   V  (issues: #..., #...)
-Open issues remaining in {sourceRef}: R
+
+⚡ DECIDE — <n, or "nothing">
+  PRs left open, need you:      Z  (#<pr3> — <BLOCKED | CI failed | UNSTABLE | BEHIND after retries | other>)
+  [REAL] items surfaced:        U  (issues: #..., dropped from batch, awaiting your call)
+  needs-you, no direction yet:  W  (issues: #..., #...)
+
+👀 SKIM — <n, or "nothing">
+  deferred by your choice:      D  (Phase-3 "defer" — decided, left open this run)
+  dropped (test failure):       V  (issues: #..., #...)
+  stopped groups (tests fail):  G  (ecosystem/group: ..., no PR this run)
+  deferred findings:            <count, or "none">  (in PR bodies)
+
+✓ DONE
+  closed as dup/wontfix:        X
+  PRs merged:                   Y  (#<pr1>, #<pr2>, ...)
+  open issues remaining:        R
 ```
+
+Mapping rationale: things still needing *your* action — a non-mergeable PR (any Phase-5 terminal state), a `[REAL]`-dropped item, an undirected `needs-you` — go in `⚡ DECIDE`. Things you already dispositioned (a Phase-3 "defer") or that the skill safely handled (**test-failure**-dropped bumps, low-severity findings) go in `👀 SKIM`. (A `[REAL]`-dropped bump is *not* here — it's a `⚡ DECIDE` item.) Merged/closed counts are `✓ DONE`. Omit any row whose count is 0, but always print the `⚡ DECIDE` header.
 
 ## Re-runnability
 
@@ -395,10 +442,10 @@ The skill is safe to re-run any time. Phase 1 step 2 detects existing open `tria
 - **Not in a GitHub git repo** → exit with a clear error.
 - **No open issues in the work set** → print "Nothing to triage. {sourceRef} is currently empty." and exit cleanly.
 - **All items classified `needs-you`** → run Phase 3 only; skip Phases 4–5; print summary.
-- **All trivial bumps fail tests in a group** → stop that group; print which bumps failed; continue with other groups; do not commit the failing group.
+- **All trivial bumps fail tests in a group** → stop that group; print which bumps failed; continue with other groups; do not commit the failing group. Report the stopped group in the Phase 6 `👀 SKIM` block (a safe default, not a decision needed).
 - **CI fails on a PR** → leave the PR open; print what failed; continue to next group; do not merge the failing PR.
 - **`mergeStateStatus == BLOCKED`** → leave the PR open; surface to user; do not attempt to bypass branch protection.
-- **Verifier flags `[REAL]` concern at Phase 1 or 4** → surface immediately; wait for user input; either drop the affected item or reclassify to `needs-you`.
+- **Verifier flags `[REAL]` concern** → never ship the flagged item on the skill's judgment, but do **not** halt the whole batch. Phase 1: reclassify the affected issue to `needs-you` (directed in Phase 3). Phase 4: drop the bump from the batch (reset-and-replay, ship the rest) and report it in the Phase 6 `⚡ DECIDE` block for the developer to pursue separately. Either way it reaches the developer as a decision item — it is never silently discarded.
 
 ## What this skill does NOT do
 
