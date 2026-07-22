@@ -24,7 +24,7 @@ You manage a scrum-aligned development workflow on top of **GitHub Projects v2**
 - Acceptance criteria use WHEN/THEN/SHALL format for testability.
 - Implementation is phased — implement, test, and verify each phase before moving on.
 - Decisions capture the *why* alongside the *what*.
-- **Never commit, push, or create PRs without explicit user permission.** Always present changes for review first and ask the developer to confirm before any git commit, git push, or PR creation.
+- **`pick` runs autonomously by default**, governed by the [Autonomy & Escalation Policy](#autonomy--escalation-policy): the skill decides-and-logs routine choices, proposes-and-proceeds on *additive* public-API and UX decisions (flagged loudly for review), and **blocks** on the human-only categories (irreversible/unrecoverable actions, spending money, product/priority tradeoffs, security & trust-boundary changes, and *breaking* public-contract changes). Use `/sprint pick N --interactive` for the old review-before-every-step flow. `plan` and `refine` remain interactive by nature (they exist to elicit intent).
 
 The skill templates are in the `templates/` directory and label definitions in `setup/labels.json`, both relative to this skill's directory: `<SKILL DIR>`.
 
@@ -295,6 +295,62 @@ When unsure, err toward creating the ADR — false positives are cheap (one extr
 5. Mention the ADR in the summary returned to the developer (e.g., `ADR D-007 created at .dev/decisions/D-007-<slug>.md, linked to #41`).
 
 This auto-ADR fires from `plan` (Step 6.5) and `refine` (Step 7.5) — see those sections for the exact hook points.
+
+---
+
+## Autonomy & Escalation Policy
+
+**This governs `pick`. Read it before implementing any issue. It decides one thing: for every choice that comes up mid-implementation, who answers it — the skill, or the human.** The default is the skill. The human is interrupted **only** for decisions that are genuinely theirs to make.
+
+The goal is to eliminate babysitting: the developer should read an outcome (an assumption ledger + a PR), not answer a stream of mid-flight questions. Most questions a coder wants to ask have a reasonable default; asking them is the tax this policy removes.
+
+### Classify every mid-implementation decision into one of three tiers
+
+**Tier B — BLOCK (stop and ask the human).** Only these interrupt the run. Stop, state the decision and the options crisply, wait for the answer.
+
+- **Irreversible / hard-to-undo actions** — data migrations, dropping columns, prod deploys, force-pushes, and **deleting anything not cheaply recoverable** (classify deletion by recoverability and blast radius, *not* by who created the file — deleting your own earlier output is still Tier B if it's materially destructive or unrecoverable).
+- **Spending money** — adding a paid dependency or service, anything that incurs cost or a paid tier.
+- **Product & priority tradeoffs** — changing the scope of the story, cutting a feature, deciding *which* thing to build when the issue is ambiguous about product intent.
+- **Security / trust-boundary changes** — anything touching authentication, authorization, permissions, credential or secret handling, encryption, PII / sensitive-data exposure or retention, or compliance posture. Also: acting on a **high-severity finding** (leaked secret, critical CVE) — surface it, do not silently "fix" and move on.
+- **Breaking public contracts** — *removing* or *renaming* an API/endpoint/field/flag, changing auth or error semantics, or any backward-incompatible change to something an external consumer depends on. (Additive, backward-compatible contract changes are Tier P — see below.)
+
+**Tier P — PROPOSE & PROCEED (decide, build, flag loudly).** Choose the option, implement it, and surface it **prominently** at the top of the review / PR body under a `⚠ Decisions to review` heading. Do **not** stop the run. The developer vetoes or redirects at PR time, where review is cheap.
+
+Choosing the option — apply this precedence, stop at the first that decides it: **(1)** the issue's explicit acceptance criteria → **(2)** a linked ADR / design doc → **(3)** existing repo convention (grep for how it's already done) → **(4)** mainstream ecosystem convention → if still ambiguous *about product intent*, it's Tier B, not Tier P. Note the chosen option and the reason in the ledger.
+
+- **Additive / backward-compatible public contract changes** — a *new* endpoint, field, or flag; a new response variant that doesn't break existing consumers. (Breaking changes are Tier B.)
+- **UX: new surfaces, flows, visual/brand, information architecture** — a net-new screen or flow, layout hierarchy, anything that changes what an existing user's muscle memory expects. For UX, always include a "look here" pointer (URL / screenshot / command to run) so review takes seconds.
+
+**Tier L — DECIDE & LOG.** Make the best call, record one line in the issue's **Assumption Ledger** (see below), keep going. These never need pre-approval and never block. In autonomous mode they don't surface until PR time; in interactive mode they surface at the next phase checkpoint (see [How this maps to execution mode](#how-this-maps-to-execution-mode)).
+
+- Naming, file placement, internal structure.
+- Which existing library/pattern/component to reuse (reusing an existing one is always Tier L; *adding a new* dependency is Tier B if paid, otherwise still runs the [Dependency Safety Check](#dependency-safety-check) gate).
+- Error-handling style, logging, test framework choice when the repo has no established one.
+- Applying an **existing** UX/design-system pattern (use the button you already have) — Tier L. Inventing a **new** one — Tier P.
+
+**When a decision could fit two tiers, escalate to the higher one** (B > P > L). When genuinely unsure whether something is Tier B, treat it as Tier B — a wrong autonomous irreversible action is far more expensive than one extra question.
+
+### The Assumption Ledger
+
+Every issue implemented by `pick` accumulates an **`## Assumptions`** section in its body (the issue template seeds it). Whenever a Tier-L or Tier-P decision is made, append one line:
+
+```
+- [L] Used JWT, not sessions — matches existing auth (D-002). Reversible.
+- [P] New `/api/v2/search` returns paginated envelope — no existing convention; flag for review.
+```
+
+Format: `- [TIER] <decision> — <one-line why>. <Reversible|Flag for review>.` This is the batch the developer reviews at PR time **instead of** answering questions during the run. Keep it terse — it is a ledger, not prose.
+
+### How this maps to execution mode
+
+`pick` runs in **autonomous mode by default** (see [Pick Step 2.5](#step-25-determine-execution-mode)). The escalation tiers apply in **both** modes; the mode only changes *when the developer sees* Tier-P and Tier-L decisions, never whether Tier-B blocks.
+
+- **Autonomous** — Tier B blocks; Tier P is built-and-flagged; Tier L is decided-and-logged. Tier P and Tier L do **not** pause the run — the developer reviews them as a batch (the ledger + `⚠ Decisions to review`) at PR time. Autonomous does not mean "never ask" — it means "only Tier B asks mid-run."
+- **Interactive (`--interactive`)** — Tier B still blocks. In addition, the run **pauses at every phase boundary** and surfaces that phase's Tier-P and Tier-L decisions for the developer to confirm or redirect *before* the next phase. So in interactive mode Tier P and Tier L are reviewed at the phase checkpoint rather than deferred to PR time. Neither tier is asked *before* the decision is made — the skill still decides and logs, then shows it at the checkpoint.
+
+### Fresh-eyes review agents (Claude-first; not in this version)
+
+The independent fresh-eyes review agents (QA black-box, security / architecture white-box) are a **planned** enhancement (see D-003) layered on `pick`'s final review, not part of this version. Until they land, `pick`'s pre-PR review battery (Step 6) runs its checks **in-context** on every tool. The tier classification and Assumption Ledger in this section are fully in effect now and are portable to every supported tool.
 
 ---
 
@@ -625,12 +681,18 @@ gh project item-edit \
 
 ### Step 2.5: Determine execution mode
 
-Read the Project item's **Size** field captured in Step 1.
+**`MODE = autonomous` is the default for all sizes.** Autonomous is governed by the [Autonomy & Escalation Policy](#autonomy--escalation-policy): the skill decides-and-logs Tier-L choices, proposes-and-proceeds on Tier-P (*additive* public-contract / UX) decisions, and **blocks** on Tier-B (irreversible/unrecoverable, money, product-priority, security/trust-boundary, and *breaking* public-contract changes — see the policy for the full list). It commits and pushes after each phase and defers manual end-to-end verification to the developer after the PR is open.
 
-- **Size = L or XL** → `MODE = autonomous`. Sizing the story L/XL is the developer's implicit authorization for end-to-end execution: the skill will not ask mid-flight questions, will commit and push after each phase, and will defer manual end-to-end verification to the developer after the PR is open.
-- **Size = XS, S, M, or unset** → `MODE = interactive`. The skill follows the existing review-before-commit, review-before-push flow.
+Switch to `MODE = interactive` **only** when the developer explicitly asks for it:
 
-State the chosen mode to the developer in one line before continuing (e.g., `Picked #42 (Size: L) → autonomous mode.` or `Picked #43 (Size: M) → interactive mode.`). Both modes still run the [Dependency Safety Check](#dependency-safety-check) gate before any new dependency is introduced, and both run the pre-PR review battery once on the full diff (Step 6).
+- The invocation includes `--interactive` (or `-i`) — e.g. `/sprint pick 42 --interactive`, or
+- The developer's request otherwise says they want to review every step / drive it manually.
+
+In `MODE = interactive`, the skill follows the review-before-commit, review-before-push flow: every phase pauses and Tier-P/Tier-L decisions are surfaced for confirmation rather than logged-and-continued.
+
+> **Size no longer selects the mode.** Previously L/XL meant autonomous and XS/S/M meant interactive; as of v0.8.0 autonomous is the default at every size and `--interactive` is the opt-out. Size still informs planning and review depth, not the ask/don't-ask behavior.
+
+State the chosen mode in one line **after the Step 4.5 route is resolved** (explore forces interactive, so announcing before that can be wrong) — e.g. `Picked #42 → autonomous (default).` or `Picked #43 → interactive (--interactive).`. Do not include Size in this line; Size no longer implies a mode. Both modes run the [Dependency Safety Check](#dependency-safety-check) gate before any new dependency is introduced, and both run the pre-PR review battery once on the full diff (Step 6). Explore issues (Step 4.5 route 2) are always interactive regardless of this default.
 
 ### Step 3: Create branch
 
@@ -655,28 +717,29 @@ Parse the issue body to extract:
 - **Risk Assessment** — be aware during implementation
 - **`## Mode: Explore` marker** — if present, the issue is an explore placeholder (no spec to read against)
 
-### Step 4.5: Choose execution mode
+### Step 4.5: Resolve execution route
 
-Surface the choice:
+**Auto-take the route implied by the issue — do not prompt when it is unambiguous** (prompting on every pick is exactly the babysitting autonomous-default removes). Determine the route from the issue and the invocation:
+
+- Issue has Acceptance Criteria + Implementation Phases → route **(1) Work as planned**. Proceed silently.
+- Issue has the `## Mode: Explore` marker, **or** neither marker nor a usable spec → route **(2) Explore**. Proceed silently.
+- The developer explicitly asked for explore / "just try things" in the invocation → route **(2)**, even if a spec exists — but first show one line: "This ignores the acceptance criteria and phases; the body is backfilled at the end. Proceed?" and confirm.
+
+Only **prompt** when the route is genuinely ambiguous (e.g. a spec exists but the developer's words suggest they want something other than implementing it):
 
 ```
 Implement #N:
   1. Work as planned — phase by phase against acceptance criteria
   2. Explore — instruction-driven loop; spec backfilled at end
   3. Something else — describe
-
-To convert an explore issue to structured before working, run `/sprint refine N`.
 ```
 
-Defaults:
-- Issue has the `## Mode: Explore` marker → default **(2)**. Option **(1)** is unavailable (no spec); if the developer picks it, redirect: "no spec yet — run `/sprint refine N` first."
-- Issue has Acceptance Criteria + Implementation Phases → default **(1)**. If the developer picks **(2)**, show one line: "This will ignore the acceptance criteria and phases; the body will be backfilled at the end. Proceed?" Confirm before continuing.
-- Neither marker nor spec → default **(2)**.
-
 Route:
-- **(1)** → Step 5 (existing phase-by-phase). The Size-based `MODE = autonomous | interactive` from Step 2.5 applies as today.
+- **(1)** → Step 5 (existing phase-by-phase). The `MODE` from Step 2.5 applies (autonomous by default; interactive if `--interactive`).
 - **(2)** → Step 5b (explore loop). `MODE` is forced to **interactive** — there is no autonomous explore.
 - **(3)** → ask the developer what they want; route to (1) or (2).
+
+**Now announce the final effective mode** (per Step 2.5), once the route is known — e.g. `Picked #42 → autonomous (default).`
 
 ### Step 5: Implement phase by phase
 
@@ -686,23 +749,29 @@ For each phase listed in the Implementation Phases section:
 
    **Dependency safety gate**: Before editing any manifest file (`package.json`, `requirements.txt`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `pom.xml`, `build.gradle`, etc.) or running any install/add command (`npm install`, `pnpm add`, `yarn add`, `pip install`, `cargo add`, `go get`, `mvn install -Dversion=`, etc.) that introduces a new dependency or changes a resolved version, run the [Dependency Safety Check](#dependency-safety-check). The check must complete with a clean pass, an accepted fallback substitution, or an explicit override before the manifest edit/install proceeds. Do not edit the manifest first and check afterward — the check gates the edit.
 2. **Test** — write or update tests that verify the acceptance criteria covered by this phase. Run the test suite to confirm.
-3. **Update the issue** — mark the phase checkbox as complete on GitHub:
-   - Fetch current body: `gh issue view N --json body -q '.body'`
-   - Find the specific `- [ ] Phase X:` line and replace `- [ ]` with `- [x]`
-   - Update: `gh api repos/{REPO}/issues/N -f body="<updated body>"`
+3. **Update the issue at the phase boundary** — mark the phase checkbox complete **and** write this phase's accumulated ledger lines in **one** issue-body update. Do not issue a separate checkbox-only update here; the combined single write is specified under **"Appending to the ledger"** below (flip `- [ ] Phase X` → `- [x]` and append the `## Assumptions` lines in the same fetched body, then one `gh api ... -f body=...`). This keeps the checkbox and the decisions atomic.
 4. **Commit and push (autonomous mode only)** — if `MODE = autonomous`:
    - `git add <files changed in this phase>` (never `git add -A`).
+   - **Secrets gate before every push (mandatory).** Stage first (above), then run a secrets scan **on the staged set** — `security-scan` / `gitleaks` if available, else the repo's configured secrets check, else a grep of `git diff --cached` for obvious key patterns. Scanning the staged set (not `git diff`) is deliberate: it covers newly-**added untracked** files that a bare `git diff` would miss. **A secret detected is Tier B — stop, do not commit or push, surface it.** Autonomous pushing happens per phase, so this gate must run per phase; the full review battery at Step 6 is too late to keep a leaked credential off the remote.
    - Commit referencing the issue and phase: `Refs #N: phase <X> — <phase description>`.
    - Push: `git push -u origin <branch-name>` (first phase establishes upstream; subsequent phases push to the same branch).
    - Progress is now visible on the remote; an interruption leaves the branch in a coherent state at phase boundaries.
-   - **Do not run the full review battery on each phase commit** — that runs once at PR-open time on the cumulative diff (Step 6).
+   - **Do not run the *full* review battery on each phase commit** — the secrets gate above is the only per-phase check; the rest runs once at PR-open time on the cumulative diff (Step 6). This split is deliberate: a pushed **secret** is an immediate live exposure (must be caught before the push), whereas SAST / `security-review` findings are about code correctness and are cheaper and just as safe to run once on the cumulative diff at PR time — the PR is gated on them (Step 6) so nothing merges uncaught.
 
-   In `MODE = interactive`, do **not** commit or push at the end of a phase — code stays local until Step 7.
+   In `MODE = interactive`, do **not** commit or push at the end of a phase — code stays local until Step 7. Instead, **this is the interactive phase checkpoint**: after finishing the phase (steps 1–3), pause and present the phase's changes together with that phase's Tier-P and Tier-L ledger lines, and let the developer confirm or redirect **before starting the next phase**. This is the per-phase pause referenced by the escalation policy; it exists only in interactive mode (autonomous mode does not pause here — it pushes and continues).
+
+**Decisions during implementation are governed by the [Autonomy & Escalation Policy](#autonomy--escalation-policy).** Whenever a choice comes up mid-phase, classify it (full definitions, tier edges, and the Tier-P precedence order are in that section):
+
+- **Tier B** (irreversible / money / product-priority / **security / breaking public contract**) — **stop and ask the developer**, in *both* modes. These always block.
+- **Tier P** (additive public-contract / UX) — decide using the Tier-P precedence order, implement it, and append a `[P]` line to the issue's **`## Assumptions`** ledger; it surfaces under `⚠ Decisions to review` in the PR. In `MODE = interactive`, it surfaces at the interactive phase checkpoint (step 4 above) for confirmation before the next phase.
+- **Tier L** (naming, reuse, internal structure, style) — decide, append an `[L]` line to the ledger, continue. Never blocks; in `MODE = interactive` it surfaces at the phase checkpoint, not asked before the decision.
+
+**Appending to the ledger (one write per phase boundary).** Do not call `gh api` after every decision. Accumulate all of the phase's Tier-L/Tier-P lines in working memory, then at the phase boundary do a **single** fetch-modify-write that applies *both* the ledger append and the phase-checkbox tick in the same updated body: fetch the issue body once, add the lines under the `## Assumptions` section (creating it if the issue predates the template) and flip `- [ ] Phase X` → `- [x]`, then one `gh api repos/{REPO}/issues/N -f body="<updated body>"`. This keeps the checkbox and the decisions atomic — the issue can never show a completed phase whose decisions were dropped. The `pick` assignment (Step 2) is the concurrency lock, so a developer hand-editing the same issue body mid-run is not expected; still, fetch the body **immediately** before the write (not earlier in the phase) to keep the read-modify-write window as small as possible.
 
 If a phase reveals problems or new requirements:
 
 - `MODE = interactive` — discuss with the developer before proceeding.
-- `MODE = autonomous` — decide and proceed. **Tightly related app-side changes that surface during the work are part of the same story** — fold them into the current phase or add a final phase for them. Surface the additions in the PR body so the developer sees them at PR-review time. Genuinely out-of-scope work goes into a new follow-up issue, not this one.
+- `MODE = autonomous` — apply the tier classification above. **A change is "in scope" only if it is strictly necessary to satisfy this issue's existing acceptance criteria** — fold those into the current phase or a final phase and log a ledger line. Anything that adds *new* user-visible behavior or a capability not in the acceptance criteria is a **scope change → Tier B** (do not silently expand the story). For genuinely out-of-scope work, **log a suggested follow-up in the ledger** (`- [L] Follow-up: <what> — out of scope for #N.`); do **not** autonomously create, size, schedule, or prioritize a new issue (creating/prioritizing work is a product-priority Tier-B decision). Mention the suggested follow-up in the PR body so the developer can create it if they agree.
 
 End-of-step state:
 - `MODE = interactive` — code changes are local only.
@@ -746,8 +815,21 @@ After all phases are complete (both modes):
    - `MODE = interactive` — `git diff` on the working tree (changes not yet committed).
    - `MODE = autonomous` — `git diff <merge-base>...HEAD` on the branch.
 
-4. Review all changes: show what was changed.
-5. Present a summary of all changes, organized by phase. In `MODE = autonomous`, also list any tightly-related app-side changes that were folded into the work (these go into the PR body in Step 8).
+   **Gate semantics (both modes).** A failing test, a lint/type error, a secrets hit, or a `security-review` finding is a **blocking gate** — it does **not** open a PR. Handle by gate type:
+   - **Non-security gates (failing test, lint, type error):** remediate in-scope and re-run until clean. If remediation is out of scope, **stop and escalate to the developer** with the failure and the options; do not proceed to Step 8 on your own.
+   - **Security gates (secrets hit, `security-review` finding):** **always stop and escalate to the developer (Tier B)** — do **not** silently remediate-and-continue and do **not** auto-override as a false positive. (Autonomously "fixing" a security finding is itself a security change, which is Tier B; the human decides whether it's a real issue and how to handle it.)
+   - `perf-review` / `simplify` findings are advisory, not blocking — fold in the cheap ones, log the rest to the ledger, continue.
+
+   Do not open a PR (Step 8) with a red blocking gate. In autonomous mode the branch is already pushed, but the PR is still gated on a clean battery.
+
+4. **Read back the Assumption Ledger** from the issue's `## Assumptions` section.
+5. Present the review in **exception-first order** — the developer should be able to act on it without reading the play-by-play:
+   1. **`⚠ Decisions to review`** — the Tier-P (`[P]`) ledger lines, each with its "look here" pointer for UX/API items. This is what most needs the developer's eyes.
+   2. **Assumptions made** — the Tier-L (`[L]`) ledger lines, for skim/audit.
+   3. **Change summary** — organized by phase; in `MODE = autonomous`, also list any tightly-related app-side changes that were folded into the work (these go into the PR body in Step 8).
+   4. **Gate results** — pass/fail from the review battery in step 3.
+
+   If there are no `[P]` lines, say so explicitly (`No decisions flagged for review.`) rather than omitting the heading — its absence is itself signal.
 
 ### Step 7: User review and commit
 
@@ -788,7 +870,7 @@ After all phases are complete (both modes):
 1. Push: `git push -u origin <branch-name>`.
 2. Create PR (template below).
 
-**`MODE = autonomous`** — the branch is already pushed (per phase, Step 5). Open the PR without asking. Use the same template, plus:
+**`MODE = autonomous`** — the branch is already pushed (per phase, Step 5). **Only if the Step 6 review battery passed all blocking gates**, open the PR without asking (a red blocking gate escalates to the developer per Step 6, it does not open a PR). Use the same template, plus:
 
 - Add a `## Autonomous execution` section noting any tightly-related app-side changes that were folded in (per Step 5).
 - Add `Manual end-to-end verification deferred to reviewer.` near the top of the PR body so the reviewer knows e2e was not performed by the skill.
@@ -797,6 +879,12 @@ PR template (both modes):
 
 ```
 gh pr create --title "<concise title>" --body "Closes #N
+
+## ⚠ Decisions to review
+<The Tier-P (`[P]`) lines from the issue's Assumption Ledger — public-API and UX decisions the skill made autonomously and the reviewer should confirm or redirect. Include each item's 'look here' pointer (URL / screenshot / command). If there are none, write 'None — no public-API or UX decisions were made autonomously.'>
+
+## Assumptions
+<The Tier-L (`[L]`) lines from the Assumption Ledger — routine decisions made without asking, for audit. If there are none, write 'None logged.' If there are more than ~8, list the most consequential and end with 'See issue #N for the full ledger.' rather than dumping all of them here.>
 
 ## Summary
 <bullet points of what was done>
@@ -832,7 +920,7 @@ The PR-merged → `Status: Done` transition is handled by the GitHub workflow if
 
 ### Step 9: Report
 
-Show the PR URL and a summary of what was implemented, which phases were completed, and any remaining notes. State the execution mode used (interactive or autonomous). For autonomous runs, explicitly remind the developer to perform manual end-to-end verification on the open PR.
+Show the PR URL and a summary of what was implemented, which phases were completed, and any remaining notes. State the execution mode used (interactive or autonomous). **Lead with the count of `⚠ Decisions to review` (Tier-P) items** so the developer knows how much of the PR needs their judgment vs. rubber-stamp — e.g. `2 decisions flagged for review, 5 assumptions logged.` For autonomous runs, explicitly remind the developer to perform manual end-to-end verification on the open PR.
 
 ---
 
@@ -1621,9 +1709,15 @@ Print verbatim:
                                   Mode prompt: structured / explore / something else.
                                   Explore records a one-line placeholder; spec backfilled later.
 
-  pick [N]                        Claim a Ready item and implement it.
+  pick [N] [--interactive]        Claim a Ready item and implement it.
                                   N = issue number; if omitted, lists Ready items.
-                                  Mode prompt: work as planned / explore / something else.
+                                  Autonomous by default (Autonomy & Escalation Policy):
+                                  blocks on irreversible / money / product / security /
+                                  breaking-contract decisions,
+                                  flags additive-API+UX under "Decisions to review", logs the rest.
+                                  --interactive (-i) pauses at each phase boundary for review.
+                                  Route (work-as-planned vs explore) is auto-detected from the
+                                  issue; you're only prompted if it's genuinely ambiguous.
                                   To convert an explore issue to structured first: /sprint refine N.
 
   refine [N]                      Groom a Backlog item into Ready: add acceptance criteria,

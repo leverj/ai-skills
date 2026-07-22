@@ -86,7 +86,7 @@ After `/sprint setup`, open the Project's **Workflows** settings page (link is p
 | Command | Purpose |
 |---------|---------|
 | `/sprint plan` | Discuss and create one or more structured GitHub Issues with acceptance criteria, phases, and risks. Adds them to the Project with Status / Priority / Size set, optionally to an iteration. |
-| `/sprint pick [N]` | List available items from the board, claim one, create a branch, implement phase by phase, create a PR. Status: Ready → In Progress → In Review. |
+| `/sprint pick [N]` | List available items from the board, claim one, create a branch, implement phase by phase, create a PR. Runs **autonomously by default** (per the Autonomy & Escalation Policy); add `--interactive` to review every step. Status: Ready → In Progress → In Review. |
 | `/sprint decide ["title"]` | Record an architectural decision in `.dev/decisions/`, cross-link to GitHub Issues. |
 | `/sprint status [all]` | Dashboard read from the Project board. Shows current iteration prominently. `status all` includes other iterations and unscheduled items. |
 | `/sprint refine [N]` | Take a Backlog item and add structured acceptance criteria, phases, risks, Priority, and Size — moves it to Status: Ready. |
@@ -130,9 +130,15 @@ When a developer runs `/sprint pick`, the skill assigns the issue to them on Git
 3. Update the phase checkbox on GitHub
 4. Move to next phase
 
-After all phases are complete, the skill presents the changes for review. For stories sized **XS / S / M**, code is never committed, pushed, or turned into a PR without explicit developer approval — the developer reviews the diff and confirms before anything leaves the local machine.
+**As of v0.8.0, `pick` runs autonomously by default at every size** (previously only L/XL were autonomous). It commits and pushes after each phase — so the remote branch reflects current progress and the developer can interrupt with coherent state — runs the pre-PR review battery once on the cumulative diff at PR-open time, and opens the PR without asking. Manual end-to-end verification is deferred to the developer on the open PR.
 
-For stories sized **L / XL**, the skill runs autonomously: it commits and pushes after each phase (so the remote branch reflects current progress and the developer can interrupt with coherent state), runs the pre-PR review battery once on the cumulative diff at PR-open time, and opens the PR without asking. The L/XL sizing on the issue is the developer's authorization for autonomous execution; manual end-to-end verification is deferred to the developer on the open PR.
+Autonomous does **not** mean "never ask." It is governed by the **Autonomy & Escalation Policy** (see [SKILL.md](SKILL.md#autonomy--escalation-policy)): every mid-implementation decision is classified into one of three tiers —
+
+- **Block** — irreversible/unrecoverable actions, spending money, product/priority tradeoffs, security & trust-boundary changes (auth, secrets, PII, permissions), and *breaking* public-contract changes → the skill stops and asks.
+- **Propose & proceed** — *additive* public-contract changes and UX decisions → the skill picks the option by a fixed precedence (acceptance criteria → ADR → repo convention → ecosystem), builds it, and flags it under `⚠ Decisions to review` in the PR.
+- **Decide & log** — naming, reuse, internal structure, style → the skill just does it and records one line in the issue's **Assumption Ledger** (`## Assumptions`).
+
+The result: instead of answering a stream of questions during the run, the developer reviews one batch at PR time — the flagged decisions and the assumption ledger. Run `/sprint pick N --interactive` for the old review-before-every-step behavior.
 
 If a session ends mid-work, the next developer can see which phases are checked off.
 
