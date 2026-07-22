@@ -3,3 +3,5 @@
 *.swo
 *~
 /.idea
+# Per-machine local sprint config (Tier-1 external-review approval) — never committed
+.dev/sprint-config.local.json
