@@ -142,6 +142,22 @@ The result: instead of answering a stream of questions during the run, the devel
 
 If a session ends mid-work, the next developer can see which phases are checked off.
 
+### Fresh-eyes review gates (v0.9.0)
+
+The catch with autonomous-default is that the coder reviewing its own work is worth little — it shares every blind spot that produced the bug. So before opening a PR, `pick` runs an independent review through **three reviewers** — run in a fresh context that never saw the coder's reasoning wherever the substrate allows (external CLI or subagent), and falling back to a *labeled degraded* in-context review otherwise (see [SKILL.md](SKILL.md#fresh-eyes-review-gates)):
+
+- **QA — black-box**: gets the acceptance criteria + how to run the app, *not* the diff; tries to make each criterion fail.
+- **Security — white-box**: gets the diff; hunts secrets / injection / authz gaps. Any finding blocks the PR and escalates.
+- **Architecture — white-box**: gets the diff + your ADRs; flags contradictions and parallel-pattern drift.
+
+Each reviewer uses the best **substrate** available, configured at `/sprint setup`:
+
+1. **External LLM CLI** (`codex`, `gemini`) — a fresh process, and cross-model when the CLI runs a *different* model than the coding host (uncorrelated blind spots). Strongest option. Approved per-machine (code leaves the machine).
+2. **Subagent** (e.g. Claude Code's Agent tool) — fresh context, same model.
+3. **In-context** — degraded floor; the review runs inline and is labeled as such.
+
+Setup auto-detects an installed CLI and records the choice in `.dev/sprint-config.json` (committed `review` block); per-machine approval to send code to an external CLI lives in a gitignored `.dev/sprint-config.local.json`. Blocking failures and inconclusive reviewers (substrate failed on every tier) escalate before the PR opens and are never treated as a pass. (A QA review that ran but couldn't drive the app returns a *labeled degraded* pass/fail — that's different from inconclusive.) `review.mode: "off"` is a labeled waiver that skips the independent reviewers but still runs the plain in-context battery.
+
 ## Labels (small set)
 
 Labels are intentionally minimal — Status / Priority / Size live as Project fields, not labels.
