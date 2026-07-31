@@ -156,7 +156,7 @@ This skill follows the same escalation and output discipline as the `sprint` ski
 - **Does the run stop to wait?** → only a couple of points *halt*; most "needs-you" items are **surfaced without halting** and collected into the Phase 6 `⚡ DECIDE` block for you to act on afterward.
 
 **The only interactive pauses (run stops and waits):**
-- **Phase 1 step 2** — direction on any pre-existing `triage/*` PRs (resume vs. leave).
+- **Phase 1 step 2** — direction on any pre-existing prior-run PRs (resume vs. leave vs. close). Non-interactive runs do not pause here; they apply the step-2 classification table autonomously.
 - **Phase 3** — directing the `needs-you` items (the sprint **Tier-B** equivalent: breaking changes, ambiguous product intent, cross-repo fixes). Never auto-actioned.
 
 **`⚡ DECIDE` items surfaced *without* halting** (the run continues; you act after, from the Phase 6 block):
@@ -186,16 +186,42 @@ Gather the **work set** — the open issues to triage — and classify them. Rou
 
 1. **Resolve context.** Read `.dev/triage.json`. Parse `owner/repo` from `git remote get-url origin`. Apply `--epic` / `--project` override if present (these set the resolved `source`). Validate config fields. Compute `{sourceRef}` and `{sourceSlug}`.
 
-2. **Pre-flight: existing open PRs.** Before doing anything else, list any open PRs whose branch matches `triage/{sourceSlug}/*`:
+2. **Pre-flight: existing open PRs.** Before doing anything else, find open PRs left behind by earlier runs. A prior run's PR is routinely left open on purpose — Phase 5 leaves `BLOCKED` PRs (branch protection, required reviewers) open by design — so on a daily cadence there is *usually* one waiting. Never skip this step.
+
+   **Detect by three signals, not by branch prefix alone.** Branch names drift across runs and skill versions; a prefix-only match silently returns empty and the run then re-derives work that is already sitting in an open PR.
+
    ```bash
-   gh pr list --repo {owner}/{repo} --state open --json number,headRefName,createdAt,author,commits \
-     --jq '.[] | select(.headRefName | startswith("triage/{sourceSlug}/"))'
+   gh pr list --repo {owner}/{repo} --state open --limit 100 \
+     --json number,headRefName,title,body,createdAt,author,commits,mergeStateStatus
    ```
-   If results are non-empty, surface them to the user with each PR's commit count and author list, and ask: *resume the existing PR (rebase + push more bumps), or abort this run, or close the existing PR and start fresh?*
+   Treat a PR as a **prior-run PR** if ANY of:
+   - **(a) branch** — `headRefName` matches `^triage/{sourceSlug}/` (the convention in Phase 4) **or** `^fix/deps`;
+   - **(b) title** — matches the Phase 4 commit convention, i.e. starts with `fix(deps)` and mentions `triage`;
+   - **(c) claim** — the body contains a `Closes #N` / `Fixes #N` for any issue that is in this run's work set (evaluated after step 3, once the work set is known — see step 3a).
 
-   **Before honoring "close existing PR and start fresh":** check whether the PR contains commits authored by anyone other than the skill (i.e. a human pushed manual fixes). If so, surface the human-authored commits explicitly (commit SHAs + messages + author) and require a second explicit confirmation before closing. Closing the PR without `--delete-branch` is safer — the branch survives on the remote even if the PR is closed, so manual work isn't lost. Default to closing PR but **keeping** the branch unless the user explicitly says delete.
+   Signals (a) and (b) are cheap and run here. Signal (c) is the authoritative one and runs as step 3a.
 
-   Wait for direction before continuing.
+   **For each prior-run PR found, classify it before asking anything:**
+
+   | State | Test | Action |
+   |---|---|---|
+   | **Superseded** | every file it changes already has the PR's target content on `{baseBranch}` | Dead. Report it; close as superseded. |
+   | **Behind** | `mergeStateStatus == "BEHIND"` and not superseded | Rebase onto `{baseBranch}` and re-push; hand to Phase 5. |
+   | **Live** | still has unlanded changes; `BLOCKED` / `CLEAN` / CI pending | Its claimed issues are **already covered** — see step 3a. |
+
+   The supersession test — for a dep-bump PR, compare each changed manifest/lockfile entry against `{baseBranch}` rather than diffing branches (a stale branch diffs huge against a moved base, which says nothing):
+   ```bash
+   git fetch origin {baseBranch} <headRefName>
+   # for each file the PR touches, does the base already carry the branch's content?
+   diff <(git show origin/<headRefName>:<file>) <(git show origin/{baseBranch}:<file>)
+   ```
+   All-identical (or differing only in a range operator that resolves to the same version) → superseded.
+
+   **Interactive runs:** surface the classification with each PR's commit count, author list, and age, then ask: *resume (rebase + push more bumps), abort this run, or close and start fresh?* Wait for direction.
+
+   **Non-interactive runs** (cron / headless — no user to ask): do not stall and do not duplicate. Apply the table autonomously — close superseded, rebase behind, and for live PRs let step 3a exclude their claimed issues — then report every action in the run summary.
+
+   **Before closing any PR (either mode):** check whether it contains commits authored by anyone other than the skill (i.e. a human pushed manual fixes). If so, surface those commits explicitly (SHAs + messages + author) and — interactive — require a second explicit confirmation; **non-interactive — never close it**, leave it and report. Closing without `--delete-branch` is safer: the branch survives even if the PR is closed, so manual work isn't lost. Default to closing the PR but **keeping** the branch unless the user explicitly says delete. A branch is only safe to delete alongside the PR when the PR was classified **superseded** and carries no human commits.
 
 3. **List the open issues in the work set.** This is the only step that branches on `source`:
 
@@ -230,6 +256,17 @@ Gather the **work set** — the open issues to triage — and classify them. Rou
    The project title for `{sourceRef}` comes from `gh project view {projectNumber} --owner {projectOwner} --format json --jq .title`.
 
    If `--limit 200` is reached (200 open issue items), the board is larger than one batch — **say so explicitly** in the triage report and process the first 200; do not pretend full coverage.
+
+3a. **Claim check — subtract issues already covered by a live PR.** This is signal (c) from step 2 and the step that actually prevents duplicated work. For every **live** prior-run PR, parse its body for `Closes #N` / `Fixes #N` / `Resolves #N` and build the set of **claimed** issue numbers:
+   ```bash
+   gh pr view <N> --repo {owner}/{repo} --json body \
+     --jq '.body | [scan("(?i)\\b(?:closes|fixes|resolves)\\s+#(\\d+)")] | flatten'
+   ```
+   Mark every work-set issue in that set as **claimed by #`<pr>`** and **exclude it from Phase 4**. Do not re-bump it, do not open a second PR for it, do not close it — the open PR already owns it. Report the claimed issues in the Phase 6 summary as `carried on #<pr>`, with the PR's blocking reason, so a PR stuck behind review stays visible instead of being silently re-derived every run.
+
+   Issues claimed by a **superseded** PR are *not* excluded — that PR is dead, so they return to the normal work set (in practice they are usually already resolved on `{baseBranch}` and will classify as **wontfix / already-resolved** in step 5).
+
+   > **Why this matters:** without the claim check, a PR left open by Phase 5's branch-protection guard is invisible to the next run. The next run re-derives the identical bumps from a fresh base, ships them, and the original PR rots into a merge conflict — the work happens twice and the first PR has to be closed by hand.
 
 4. **Spawn an `Explore` subagent** with the open-issue list and these instructions:
    - For each issue: extract the CVE / GHSA / advisory ID(s) and affected dep + version range from the body.
@@ -311,11 +348,12 @@ Wait for free-form reply. Apply the user's direction:
 
 For each PR-group:
 
-1. **Branch off latest base:**
+1. **Branch off latest base.** The branch name is a **fixed convention, not a suggestion** — step 2's pre-flight matches on it, so an improvised name blinds the next run's duplicate detection. Use exactly:
    ```bash
    git fetch origin {baseBranch}
    git checkout -b triage/{sourceSlug}/{ecosystem-or-group}-$(date +%Y-%m-%d) origin/{baseBranch}
    ```
+   `{sourceSlug}` is the value computed in Phase 1 (`epic-{N}` / `project-{N}`), and the date is ISO `YYYY-MM-DD`. Do not substitute `fix/deps-…` or any other prefix.
 2. **Apply each trivial bump in this group**, using the ecosystem's `updateCommand` template. For `updateMechanism: "spm-resolve"`, drive Xcode/SPM resolution and stage the updated `Package.resolved`.
 3. **Run the ecosystem's `testCommand`.** If tests fail, isolate the breaking bump with a **bounded linear strategy** (no binary-search — `testCommand` may take many minutes and log₂(N) reruns is operationally expensive):
    - **Attempt 1** — re-run with the most recently added bump removed (reset-and-replay): `git checkout {lockfile} && {updateCommand for all-bumps-minus-last}`, then `{testCommand}`.
@@ -409,8 +447,11 @@ Print in the three-block order per the [Output & escalation contract](#output--e
   PRs left open, need you:      Z  (#<pr3> — <BLOCKED | CI failed | UNSTABLE | BEHIND after retries | other>)
   [REAL] items surfaced:        U  (issues: #..., dropped from batch, awaiting your call)
   needs-you, no direction yet:  W  (issues: #..., #...)
+  carried on an open PR:        C  (#<pr> — claims #..., #...; blocked: <reason>; age <n>d)
 
 👀 SKIM — <n, or "nothing">
+  prior-run PRs closed:         S  (#<pr> — superseded, already on {baseBranch})
+  prior-run PRs rebased:        B  (#<pr> — was BEHIND)
   deferred by your choice:      D  (Phase-3 "defer" — decided, left open this run)
   dropped (test failure):       V  (issues: #..., #...)
   stopped groups (tests fail):  G  (ecosystem/group: ..., no PR this run)
@@ -422,11 +463,13 @@ Print in the three-block order per the [Output & escalation contract](#output--e
   open issues remaining:        R
 ```
 
-Mapping rationale: things still needing *your* action — a non-mergeable PR (any Phase-5 terminal state), a `[REAL]`-dropped item, an undirected `needs-you` — go in `⚡ DECIDE`. Things you already dispositioned (a Phase-3 "defer") or that the skill safely handled (**test-failure**-dropped bumps, low-severity findings) go in `👀 SKIM`. (A `[REAL]`-dropped bump is *not* here — it's a `⚡ DECIDE` item.) Merged/closed counts are `✓ DONE`. Omit any row whose count is 0, but always print the `⚡ DECIDE` header.
+Mapping rationale: things still needing *your* action — a non-mergeable PR (any Phase-5 terminal state), a `[REAL]`-dropped item, an undirected `needs-you`, **a prior-run PR still carrying issues** — go in `⚡ DECIDE`. The carried-PR row is what makes a stuck PR impossible to ignore: it reappears in `⚡ DECIDE` every run, with its age, until it merges or is closed. Things you already dispositioned (a Phase-3 "defer") or that the skill safely handled (**test-failure**-dropped bumps, low-severity findings) go in `👀 SKIM`. (A `[REAL]`-dropped bump is *not* here — it's a `⚡ DECIDE` item.) Merged/closed counts are `✓ DONE`. Omit any row whose count is 0, but always print the `⚡ DECIDE` header.
 
 ## Re-runnability
 
-The skill is safe to re-run any time. Phase 1 step 2 detects existing open `triage/{sourceSlug}/*` PRs and either resumes them or asks for direction. There is no local state file to clean up between runs. Epic runs and project runs use distinct branch prefixes (`triage/epic-N/*` vs `triage/project-N/*`), so a run against one source never collides with a run against another.
+The skill is safe to re-run any time. Phase 1 step 2 detects prior-run PRs (by branch, by title, and — step 3a — by the issues they claim), then closes the superseded ones, rebases the stale ones, and subtracts issues already covered by a live one. There is no local state file to clean up between runs. Epic runs and project runs use distinct branch prefixes (`triage/epic-N/*` vs `triage/project-N/*`), so a run against one source never collides with a run against another.
+
+**Re-runnability depends on the claim check.** A PR that Phase 5 leaves open (branch protection, red CI) must not be re-derived by the next run. Detection is deliberately redundant — branch prefix, title, and `Closes #N` claims — because any single signal can drift while the other two still hold.
 
 ## Context hygiene
 
@@ -444,7 +487,8 @@ The skill is safe to re-run any time. Phase 1 step 2 detects existing open `tria
 - **All items classified `needs-you`** → run Phase 3 only; skip Phases 4–5; print summary.
 - **All trivial bumps fail tests in a group** → stop that group; print which bumps failed; continue with other groups; do not commit the failing group. Report the stopped group in the Phase 6 `👀 SKIM` block (a safe default, not a decision needed).
 - **CI fails on a PR** → leave the PR open; print what failed; continue to next group; do not merge the failing PR.
-- **`mergeStateStatus == BLOCKED`** → leave the PR open; surface to user; do not attempt to bypass branch protection.
+- **`mergeStateStatus == BLOCKED`** → leave the PR open; surface to user; do not attempt to bypass branch protection. The PR is then owned by step 2 / step 3a on every subsequent run — its issues stay excluded from Phase 4 so the bumps are never re-derived behind its back.
+- **Prior-run PR undetectable** (branch renamed by hand, body stripped of `Closes #N`) → the run may duplicate its work. If Phase 4 is about to bump a dep whose advisory issue was closed on `{baseBranch}` within the lookback, treat that as a supersession signal and re-check open PRs before committing. Never delete a branch you cannot positively classify.
 - **Verifier flags `[REAL]` concern** → never ship the flagged item on the skill's judgment, but do **not** halt the whole batch. Phase 1: reclassify the affected issue to `needs-you` (directed in Phase 3). Phase 4: drop the bump from the batch (reset-and-replay, ship the rest) and report it in the Phase 6 `⚡ DECIDE` block for the developer to pursue separately. Either way it reaches the developer as a decision item — it is never silently discarded.
 
 ## What this skill does NOT do
