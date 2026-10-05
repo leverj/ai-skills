@@ -4,7 +4,8 @@ description: >
   End-to-end triage and fix loop for a GitHub backlog of issues, sourced from either an
   epic (umbrella issue with native sub-issues) or a GitHub Projects v2 board. Triages the
   open issues, auto-closes duplicates and won't-fixes, surfaces big-ticket items for the
-  user, bundles all trivial dep bumps into one PR per ecosystem, ships them. Repo-specific
+  user, bundles all trivial dep bumps into one PR per ecosystem, prunes resolution pins the
+  dependency chain no longer needs, ships them. Repo-specific
   behavior comes from `.dev/triage.json` in the current repo. Use when the user says
   "triage", "/triage", "let's clear epic #N", "triage the security project", "triage project
   #N", or any variation of working through the open issues of an epic or a Project board.
@@ -41,7 +42,7 @@ Throughout this skill, two placeholders stand for the resolved source. Compute t
 
 - `--epic <N>` — run against epic `N` this once. Forces `source = epic` regardless of config.
 - `--project <N>` — run against Projects v2 board number `N` this once. Forces `source = project` regardless of config. The project owner is taken from config `project.owner` if present, otherwise defaults to the `owner` parsed from `git remote get-url origin`.
-- `--dry-run` — read-only mode. **All write operations are replaced with "would do" prints:** Phase 2 prints what it would close but issues no `gh issue close`; Phase 3 prints what new follow-up issues it would file but issues no `gh issue create` / `addSubIssue` / `project item-add`; Phase 4 prints the bump plan but does no branch creation, commit, push; Phase 5 is skipped entirely. Devil's-advocate verifiers still run (they are read-only). Use this to preview a run end-to-end before letting it act.
+- `--dry-run` — read-only mode. **All write operations are replaced with "would do" prints:** Phase 2 prints what it would close but issues no `gh issue close`; Phase 3 prints what new follow-up issues it would file but issues no `gh issue create` / `addSubIssue` / `project item-add`; Phase 3a prints the prune plan only (its scratch experiments run in a throwaway worktree; nothing is tested, committed or pushed); Phase 4 prints the bump plan but does no branch creation, commit, push; Phase 5 is skipped entirely. Devil's-advocate verifiers still run (they are read-only). Use this to preview a run end-to-end before letting it act.
 
 `--epic` and `--project` are **mutually exclusive** — passing both is an error; exit and tell the user to pick one.
 
@@ -68,7 +69,13 @@ The `source` field selects which block is required. Everything below `baseBranch
       "updateCommand": "yarn up {dep}@{version}",
       "testCommand": "yarn workspaces foreach -A run test",
       "separatePR": true,
-      "alwaysRunSecurityReview": true
+      "alwaysRunSecurityReview": true,
+      "allowResolutionPins": true,
+      "pruneResolutions": true,
+      "pinField": "resolutions",
+      "installCommand": "yarn install --mode=skip-build",
+      "refreshCommand": "yarn up -R {dep}",
+      "minPackageAgeDays": 15
     },
     "ios-native": {
       "manifestGlob": "ios-native/**/Package.resolved",
@@ -115,6 +122,7 @@ Before Phase 1, validate the loaded config:
 - `ecosystems` is an object with at least one key.
 - For each ecosystem: `manifestGlob`, `testCommand` are required strings; `updateCommand` OR `updateMechanism` is required; `manifestGlob` matches at least one file in the repo (else the ecosystem is "configured but absent" — print a warning and skip Phase 4 for it).
 - `duplicateRule` is one of the documented values.
+- For each ecosystem with `allowResolutionPins` or `pruneResolutions` true: `pinField`, `installCommand`, `refreshCommand` resolve to non-empty strings (defaults below). `minPackageAgeDays`, if present, is a non-negative integer.
 
 On any validation failure, exit with a message naming the field, the actual value, and the expected shape. Do not proceed.
 
@@ -136,6 +144,12 @@ On any validation failure, exit with a message naming the field, the actual valu
   - `separatePR` (bool, default `false`) — if true, this ecosystem's bumps go in their own PR; if false, all `separatePR: false` ecosystems share one PR.
   - `lintCommand` (string, optional) — extra format/lint command to run before commit.
   - `alwaysRunSecurityReview` (bool, default `true`) — **even if the diff is lockfile-only**, run the `security-review` skill on it. Dep bumps ARE the supply-chain attack surface (typo-squats, postinstall scripts, transitive risk). Override at your own peril.
+  - `allowResolutionPins` (bool, default `false`) — if true, a fix reachable only by adding or raising a **same-major** pin in the root manifest's `pinField` classifies as **trivial (pin)** instead of `needs-you` (see Phase 1 step 5). False keeps the pre-0.12 behavior: every pin-only fix is `needs-you`.
+  - `pruneResolutions` (bool, default `false`) — if true, [Phase 3a](#phase-3a--resolutions-pruning-autonomous-every-run) runs every triage run and removes pins the dependency chain no longer needs. Pins are **transient**: added to close an advisory, removed as soon as the natural resolution is safe on its own.
+  - `pinField` (string, default `"resolutions"`) — dotted path of the pin map in the **root** manifest: `"resolutions"` (yarn), `"overrides"` (npm), `"pnpm.overrides"` (pnpm). Absent from the root manifest → nothing to pin or prune.
+  - `installCommand` (string, default `"yarn install --mode=skip-build"`) — re-resolves the lockfile after a pin edit. Prefer a mode that skips lifecycle scripts; pin experiments install untrusted transitive versions.
+  - `refreshCommand` (string, default `"yarn up -R {dep}"`) — in-range lockfile refresh of every copy of `{dep}`, no manifest range change.
+  - `minPackageAgeDays` (int, default `0`) — dependency cooldown. A version published fewer than N days ago is never introduced by a bump, a pin, or a prune outcome; the item is deferred to a later run. Publish time comes from the registry (`npm view {dep} time --json`).
 
 If `.dev/triage.json` is missing or malformed, exit with a clear error pointing the user to the schema above.
 
@@ -164,9 +178,9 @@ This skill follows the same escalation and output discipline as the `sprint` ski
 - **A non-mergeable PR** at ship time (`BLOCKED` / CI-failed / `UNSTABLE` / `BEHIND`-after-retries / other) → left open and reported; you must act (merge, fix CI, get review). Never bypassed.
 
 **Autonomous, no decision needed:**
-- **Trivial dep bumps + dup/wontfix cleanup = decide and log** (the **Tier-L** equivalent) — acted on and recorded in the Phase 6 summary.
+- **Trivial dep bumps (including same-major `trivial (pin)` fixes) + dup/wontfix cleanup + pin pruning = decide and log** (the **Tier-L** equivalent) — acted on and recorded in the Phase 6 summary.
 - Triage has **no "propose & proceed" (Tier-P) tier for issue/product decisions** — it never invents product / API / UX changes. When unsure, escalate; never guess on a human call.
-- **Safe defaults reported in `👀 SKIM`** (not `⚡ DECIDE`): **dropping a bump whose tests fail** during isolation, and **stopping a group whose tests won't pass**. (Distinct from a `[REAL]`-dropped bump, which is `⚡ DECIDE`.)
+- **Safe defaults reported in `👀 SKIM`** (not `⚡ DECIDE`): **dropping a bump or pin removal whose tests fail** during isolation, **stopping a group whose tests won't pass**, **keeping a pin that is still needed**, and **deferring a version still inside the `minPackageAgeDays` cooldown**. (Distinct from a `[REAL]`-dropped bump, which is `⚡ DECIDE`.)
 
 **Output — DECIDE / SKIM / DONE.** The two interactive pauses above and the **final summary** (Phase 6) use this structure; intermediate progress recaps (Phase 1 triage table, Phase 2 cleanup recap) stay compact and are not reformatted. The blocks:
 
@@ -272,7 +286,9 @@ Gather the **work set** — the open issues to triage — and classify them. Rou
    - For each issue: extract the CVE / GHSA / advisory ID(s) and affected dep + version range from the body.
    - Check current code state: is the dep still in any lockfile at the affected version? Use `git grep` / `rg` against the configured lockfile paths.
    - Read the upstream advisory / changelog for the recommended safe version when available.
-   - Return a compact classification table (no per-issue prose), with one row per issue: `{number, advisory_id, dep, current_version, safe_version, ecosystem, proposed_class, reason}`.
+   - For a transitive dep, find its requesting parents (`yarn why <dep>` or the ecosystem equivalent) and the cheapest fix route per step 5 (`parent` / `refresh` / `pin`).
+   - If `minPackageAgeDays > 0`, check the safe version's publish age; a too-young safe version is `deferred (cooldown)` — no action this run, the issue stays open, retried next run.
+   - Return a compact classification table (no per-issue prose), with one row per issue: `{number, advisory_id, dep, current_version, safe_version, ecosystem, proposed_class, fix_route, reason}`.
 
 5. **Classify** each issue into exactly one of:
    - **duplicate** — same advisory/CVE/GHSA ID as another open issue in the work set. (Same root dep with *different* advisory IDs is NOT a duplicate. If `duplicateRule == "same-root-dep-flag"`, also flag same-root-dep clusters as merge candidates but do not auto-close them.)
@@ -282,10 +298,17 @@ Gather the **work set** — the open issues to triage — and classify them. Rou
      - changelog has no breaking-change section (and you can actually read the changelog confidently)
      - belongs to a configured ecosystem
      - lockfile-only changes always qualify, code-touching dep updates only qualify when no breaking behavior is documented
-   - **needs-you** — major bump, ambiguous CVE applicability, dep replacement, deprecated dep with no drop-in, missing/unreadable changelog, a cross-repo project item, or anything that requires a judgment call.
+   - **trivial (pin)** — only when the ecosystem sets `allowResolutionPins: true`. The vulnerable dep is transitive and the fix is reachable within its **current major**. Pick the first route that delivers the safe version:
+     1. **parent** — bump the direct parent (the dep a workspace manifest declares) within patch/minor;
+     2. **refresh** — in-range lockfile refresh, `{refreshCommand}`, no manifest change;
+     3. **pin** — add or raise the `{pinField}` entry for the transitive dep to the safe version, same major.
+
+     Routes 1–2 are plain `trivial`; only route 3 is `trivial (pin)`. A pin that would move the transitive dep across a **major** stays `needs-you`.
+   - **needs-you** — major bump (including a cross-major pin), a pin-only fix when `allowResolutionPins` is off, ambiguous CVE applicability, dep replacement, deprecated dep with no drop-in, missing/unreadable changelog, a cross-repo project item, or anything that requires a judgment call.
+   - **deferred (cooldown)** — would be trivial, but the safe version is younger than `minPackageAgeDays`. No action, issue stays open; reported in `👀 SKIM`.
 
 6. **Devil's-advocate verifier on the classification.** Spawn a `general-purpose` Agent with the full classification table and this prompt:
-   > "I classified each issue as duplicate / wontfix / trivial / needs-you. Argue the counter-case for each non-needs-you entry — what would make it wrong? Be specific. Distinguish between (a) real concerns where the classification is likely wrong, (b) speculative concerns where there's a remote risk but no concrete evidence, and (c) style concerns. Return your output as a list with each concern tagged [REAL] / [SPECULATIVE] / [STYLE]."
+   > "I classified each issue as duplicate / wontfix / trivial / trivial (pin) / needs-you. Argue the counter-case for each non-needs-you entry — what would make it wrong? For trivial (pin), also argue whether a parent bump or in-range refresh would have sufficed, and whether the pin crosses a major for any requester. Be specific. Distinguish between (a) real concerns where the classification is likely wrong, (b) speculative concerns where there's a remote risk but no concrete evidence, and (c) style concerns. Return your output as a list with each concern tagged [REAL] / [SPECULATIVE] / [STYLE]."
 
    Then, for each `[REAL]` concern, **reclassify the affected issue to `needs-you`** so you direct it in Phase 3 — do not halt Phase 1 mid-run. `[SPECULATIVE]` and `[STYLE]` go in the triage report but change nothing. This keeps the classification honest without the verifier stalling every invocation with low-confidence murmurs.
 
@@ -296,8 +319,9 @@ Gather the **work set** — the open issues to triage — and classify them. Rou
    Triage of N open issues of {sourceRef}:
      duplicate  (X)  #..., #...   → close, all reference #...
      wontfix    (X)  #..., #...   → <one-line reason class>
-     trivial    (X)  #..., #...   (ecosystem breakdown: js=A, ios-native=B, ...)
+     trivial    (X)  #..., #...   (ecosystem breakdown: js=A, ios-native=B, ...; of which pin: P)
      needs-you  (X)  #..., #...
+     cooldown   (X)  #..., #...   (safe version < minPackageAgeDays old; retried next run)
    Verifier:
      [REAL]        <list, or "no concerns">
      [SPECULATIVE] <list, or "none">  (informational; not blocking)
@@ -342,9 +366,42 @@ Wait for free-form reply. Apply the user's direction:
   - **epic** → `gh api -H "GraphQL-Features: sub_issues" graphql -f query='mutation { addSubIssue(input: {issueId: $epicId, subIssueId: $newId}) { ... } }'`
   - **project** → `gh project item-add {projectNumber} --owner {projectOwner} --url <newIssueUrl>`
 
+## Phase 3a — Resolutions pruning (autonomous, every run)
+
+Pins are **transient**. Every run, for each ecosystem with `pruneResolutions: true` whose root manifest has a non-empty `{pinField}`, find the pins the dependency chain no longer needs. This phase only **plans**; the removals ship through Phase 4 with the bumps. It runs even when the work set is empty or all-`needs-you`.
+
+**Skip** a pin (keep it, no experiment) when: a `trivial (pin)` item in this run adds or raises it; or a live prior-run PR (Phase 1 step 2) already removes it — report that as `carried on #<pr>`.
+
+1. **Scratch worktree** off the base, so the experiments never touch the working tree:
+   ```bash
+   git fetch origin {baseBranch}
+   git worktree add --detach <scratch>/prune origin/{baseBranch}
+   ```
+2. **Per pin, one experiment** (reset the worktree between pins — `git -C <scratch>/prune checkout -- .`):
+   - Record **before**: the version(s) the pin resolves to in the base lockfile (`P`).
+   - Delete that one key from `{pinField}` in the root manifest, run `{installCommand}`.
+   - Record **after**: every resolved copy of the package (`yarn why <pkg>` / lockfile entries whose descriptor names `<pkg>`) — the set `N`.
+   - If some copy falls short of the rule below, try `{refreshCommand}` for the package, then a patch/minor bump of the blocking direct parent; keep whichever (if either) makes it pass, and record it as part of the removal.
+3. **Removable** iff every copy `n` in `N`:
+   - **same-major pin** (requesters' declared ranges admit `P`'s major) — `n` is in `P`'s major **and** either `n ≥ P` or `n` is advisory-clean;
+   - **cross-major pin** (pin forces a higher major than any requester declares, e.g. `tar@npm:^6.1.11 → 7.x`) — `n` is advisory-clean. Nothing else qualifies;
+   - and, if `minPackageAgeDays > 0`, any `n` not already in the base lockfile is at least that old.
+
+   Advisory-clean means no unwithdrawn GitHub advisory affects that exact version (`ecosystem=npm` for yarn/npm/pnpm):
+   ```bash
+   gh api "/advisories?affects=<pkg>@<n>&ecosystem=npm&per_page=100" \
+     --jq '[.[] | select(.withdrawn_at == null)] | length'   # 0 = clean
+   ```
+4. **Keep** every other pin, with its **blocker** — the requester holding the version down (e.g. `js-yaml 4.x — lerna 9 pins 4.1.1 exactly`), `cooldown (<pkg>@<n>, <d>d old)`, or `install failed`. Kept pins go in the Phase 6 `👀 SKIM` block; they are re-checked next run.
+5. **Remove the worktree** (`git worktree remove --force <scratch>/prune`) and hand the removable set (pin, was `P`, now `N`, why safe, any refresh/parent bump) to Phase 4.
+
+`--dry-run`: print the plan (removable + kept-with-blocker) and stop here for this phase.
+
 ## Phase 4 — Bundle trivial fixes (autonomous; runs the 5-check gate)
 
-**One PR per ecosystem with `separatePR: true`.** Ecosystems with `separatePR: false` are merged into one shared PR. Each PR is built and shipped independently.
+**One PR per ecosystem with `separatePR: true`.** Ecosystems with `separatePR: false` are merged into one shared PR. Each PR is built and shipped independently. Phase 3a's removable pins ride in their ecosystem's group; a group with removable pins but no bumps is a **prune-only** group and still gets its own PR.
+
+**Cooldown.** If `minPackageAgeDays > 0`, no step below may introduce a version younger than that — a bump, pin, refresh, or parent bump that would is skipped and reported as `deferred (cooldown)`.
 
 For each PR-group:
 
@@ -354,17 +411,19 @@ For each PR-group:
    git checkout -b triage/{sourceSlug}/{ecosystem-or-group}-$(date +%Y-%m-%d) origin/{baseBranch}
    ```
    `{sourceSlug}` is the value computed in Phase 1 (`epic-{N}` / `project-{N}`), and the date is ISO `YYYY-MM-DD`. Do not substitute `fix/deps-…` or any other prefix.
-2. **Apply each trivial bump in this group**, using the ecosystem's `updateCommand` template. For `updateMechanism: "spm-resolve"`, drive Xcode/SPM resolution and stage the updated `Package.resolved`.
-3. **Run the ecosystem's `testCommand`.** If tests fail, isolate the breaking bump with a **bounded linear strategy** (no binary-search — `testCommand` may take many minutes and log₂(N) reruns is operationally expensive):
-   - **Attempt 1** — re-run with the most recently added bump removed (reset-and-replay): `git checkout {lockfile} && {updateCommand for all-bumps-minus-last}`, then `{testCommand}`.
-   - If still failing, **Attempt 2** — drop the next-most-recent bump (reset-and-replay each time, never incremental drops, to avoid stale transitive resolutions).
+2. **Apply each trivial bump in this group**, using the ecosystem's `updateCommand` template — or, per its `fix_route`, `{refreshCommand}` (refresh) or a `{pinField}` add/raise in the root manifest followed by `{installCommand}` (pin). For `updateMechanism: "spm-resolve"`, drive Xcode/SPM resolution and stage the updated `Package.resolved`.
+
+   **Then apply the removable pins** from Phase 3a, **last** (so isolation drops them first — they close no issue): delete each key from `{pinField}`, apply any recorded refresh/parent bump, run `{installCommand}` once. Re-check every pruned package against the Phase 3a rule in the **combined** lockfile; restore any pin that no longer passes and report it as kept.
+3. **Run the ecosystem's `testCommand`.** If tests fail, isolate the breaking change with a **bounded linear strategy** (no binary-search — `testCommand` may take many minutes and log₂(N) reruns is operationally expensive). Each bump and each pin removal is one unit, in application order:
+   - **Attempt 1** — re-run with the most recently added unit removed (reset-and-replay): `git checkout {lockfile} <touched manifests> && <replay all-units-minus-last>`, then `{testCommand}`.
+   - If still failing, **Attempt 2** — drop the next-most-recent unit (reset-and-replay each time, never incremental drops, to avoid stale transitive resolutions).
    - **Cap at 3 isolation attempts per group.** If after 3 attempts tests still fail, give up on this group entirely: stop it, print which bumps were attempted, do not commit, continue to the next group.
-   - Every dropped bump is noted in the final summary as `dropped (test failure during isolation)`.
+   - Every dropped bump is noted in the final summary as `dropped (test failure during isolation)`; a dropped pin removal means the pin stays (kept, blocker `tests fail without it`).
    - If ALL bumps in a group must be dropped, treat as "group failed" — do not commit, do not push, continue to the next group.
 4. **Devil's-advocate verifier on the bumps actually being committed.** Spawn a `general-purpose` Agent with the diff and this prompt:
-   > "These bumps were classified as trivial and tests pass. Argue why any of them is unsafe to merge — look for transitive breakage, semver lies, known-bad versions, lockfile drift, postinstall scripts in the new transitive deps. Tag each concern [REAL] / [SPECULATIVE] / [STYLE]."
+   > "These bumps, pins and pin removals were classified as trivial and tests pass. Argue why any of them is unsafe to merge — look for transitive breakage, semver lies, known-bad versions, lockfile drift, postinstall scripts in the new transitive deps, a pin that crosses a major, and a removed pin whose package now resolves to an advisory-affected or lower version. Tag each concern [REAL] / [SPECULATIVE] / [STYLE]."
 
-   A `[REAL]` finding does not halt the batch: **drop the flagged bump from this group** (never ship it on the verifier's doubt) — reset-and-replay, re-run tests, ship the rest — and **record it for the Phase 6 `⚡ DECIDE` block** so the developer can pursue it separately (see [Output & escalation contract](#output--escalation-contract) / [failure mode](#failure-modes)). It is reported, never silently discarded. Document `[SPECULATIVE]` concerns in the PR body and continue.
+   A `[REAL]` finding does not halt the batch: **drop the flagged bump (or restore the flagged pin) from this group** (never ship it on the verifier's doubt) — reset-and-replay, re-run tests, ship the rest — and **record it for the Phase 6 `⚡ DECIDE` block** so the developer can pursue it separately (see [Output & escalation contract](#output--escalation-contract) / [failure mode](#failure-modes)). It is reported, never silently discarded. Document `[SPECULATIVE]` concerns in the PR body and continue.
 5. **Run the configured `lintCommand`** for the ecosystem if set; must exit 0.
 6. **Pre-commit gate.** If `preCommitGate` is set in config, invoke that agent via the `Agent` tool:
    ```
@@ -373,11 +432,11 @@ For each PR-group:
    Otherwise run the four checks individually as Skill calls:
    - **secrets scan** — always run (inspect `git diff --cached` for credential-shaped strings).
    - **`security-review` skill** — **always run on dep-bump diffs**, even lockfile-only, because dep bumps are the supply-chain attack surface (typo-squats, postinstall scripts, transitive risk). This overrides the general "skip code-reviews on non-code diffs" rule for this skill specifically.
-   - **`perf-review` skill** — run when the diff includes any file other than the lockfile (lockfile-only diffs skip perf review). Deterministic, not judgment-based.
+   - **`perf-review` skill** — run when the diff includes any file other than the lockfile (lockfile-only diffs skip perf review). A root-manifest diff confined to `{pinField}` counts as lockfile-only. Deterministic, not judgment-based.
    - **`simplify` skill** — same rule as perf-review: skip on lockfile-only diffs, run when the bump touched application code.
 
    Lint/format was already run in step 5; do not run twice. Triage findings honestly. Fix HIGH/CRITICAL before commit. Document deferred LOW/INFO inline in the PR body.
-7. **Commit** with subject only: `fix(deps): <ecosystem> bumps from {sourceRef} triage (<date>)`. No body, no email, no Claude footer.
+7. **Commit** with subject only: `fix(deps): <ecosystem> bumps from {sourceRef} triage (<date>)` — for a prune-only group, `fix(deps): <ecosystem> pin pruning from {sourceRef} triage (<date>)` (still matches Phase 1 signal (b)). No body, no email, no Claude footer.
 8. **Push** the branch.
 
 ## Phase 5 — Ship (autonomous, branch-protection-aware)
@@ -396,6 +455,11 @@ For each PR pushed in Phase 4:
    - Closes #<N1>
    - Closes #<N2>
 
+   ## Pins removed
+   | Pin | Was | Now resolves to | Why safe |
+   |---|---|---|---|
+   | `<key>` | `<P>` | `<N>` (via `<refresh / parent a→b>`, if any) | `≥ pin, same major` / `advisory-clean` |
+
    ## Test plan
    - [x] {ecosystem} test suite green
    - [x] Pre-commit gate clean (or deferred findings listed below)
@@ -405,7 +469,7 @@ For each PR pushed in Phase 4:
    EOF
    )"
    ```
-   The `Closes #N` lines auto-close the linked issues on merge — which removes them from the epic's sub-issue progress and marks them Done on the Project board.
+   Omit **Pins removed** when none; a prune-only PR uses the step-7 prune-only title and has no **Closes** section. The `Closes #N` lines auto-close the linked issues on merge — which removes them from the epic's sub-issue progress and marks them Done on the Project board.
 
 2. **Wait for CI** with `gh pr checks <N> --watch`. If checks fail, stop this PR; leave it open; surface the failure; do not merge; continue to the next group.
 
@@ -455,19 +519,25 @@ Print in the three-block order per the [Output & escalation contract](#output--e
   deferred by your choice:      D  (Phase-3 "defer" — decided, left open this run)
   dropped (test failure):       V  (issues: #..., #...)
   stopped groups (tests fail):  G  (ecosystem/group: ..., no PR this run)
+  deferred (cooldown):          K  (issues/pins: <pkg>@<ver> <d>d old, ...)
+  pins kept:                    Q  (<pkg> <major>.x — <blocker>, ...)
   deferred findings:            <count, or "none">  (in PR bodies)
 
 ✓ DONE
   closed as dup/wontfix:        X
+  pins added/raised:            A  (<pkg> → <ver>, in #<pr>)
+  pins removed:                 P  (<pkg>, ... in #<pr>)
   PRs merged:                   Y  (#<pr1>, #<pr2>, ...)
   open issues remaining:        R
 ```
 
-Mapping rationale: things still needing *your* action — a non-mergeable PR (any Phase-5 terminal state), a `[REAL]`-dropped item, an undirected `needs-you`, **a prior-run PR still carrying issues** — go in `⚡ DECIDE`. The carried-PR row is what makes a stuck PR impossible to ignore: it reappears in `⚡ DECIDE` every run, with its age, until it merges or is closed. Things you already dispositioned (a Phase-3 "defer") or that the skill safely handled (**test-failure**-dropped bumps, low-severity findings) go in `👀 SKIM`. (A `[REAL]`-dropped bump is *not* here — it's a `⚡ DECIDE` item.) Merged/closed counts are `✓ DONE`. Omit any row whose count is 0, but always print the `⚡ DECIDE` header.
+Mapping rationale: things still needing *your* action — a non-mergeable PR (any Phase-5 terminal state), a `[REAL]`-dropped item, an undirected `needs-you`, **a prior-run PR still carrying issues** — go in `⚡ DECIDE`. The carried-PR row is what makes a stuck PR impossible to ignore: it reappears in `⚡ DECIDE` every run, with its age, until it merges or is closed. Things you already dispositioned (a Phase-3 "defer") or that the skill safely handled (**test-failure**-dropped bumps, cooldown deferrals, pins still needed, low-severity findings) go in `👀 SKIM`. (A `[REAL]`-dropped bump is *not* here — it's a `⚡ DECIDE` item.) Merged/closed counts are `✓ DONE`. Omit any row whose count is 0, but always print the `⚡ DECIDE` header.
 
 ## Re-runnability
 
 The skill is safe to re-run any time. Phase 1 step 2 detects prior-run PRs (by branch, by title, and — step 3a — by the issues they claim), then closes the superseded ones, rebases the stale ones, and subtracts issues already covered by a live one. There is no local state file to clean up between runs. Epic runs and project runs use distinct branch prefixes (`triage/epic-N/*` vs `triage/project-N/*`), so a run against one source never collides with a run against another.
+
+Pruning is idempotent: Phase 3a re-derives the removable set from `{baseBranch}` every run, skips pins a live prior-run PR already removes, and re-checks every kept pin — so a pin stays only as long as some requester still needs it.
 
 **Re-runnability depends on the claim check.** A PR that Phase 5 leaves open (branch protection, red CI) must not be re-derived by the next run. Detection is deliberately redundant — branch prefix, title, and `Closes #N` claims — because any single signal can drift while the other two still hold.
 
@@ -483,8 +553,9 @@ The skill is safe to re-run any time. Phase 1 step 2 detects prior-run PRs (by b
 - **Both `--epic` and `--project` passed** → exit; tell the user the flags are mutually exclusive.
 - **`source: "project"` but the board has no items / can't be read** → surface the raw `gh project item-list` error and stop.
 - **Not in a GitHub git repo** → exit with a clear error.
-- **No open issues in the work set** → print "Nothing to triage. {sourceRef} is currently empty." and exit cleanly.
-- **All items classified `needs-you`** → run Phase 3 only; skip Phases 4–5; print summary.
+- **No open issues in the work set** → print "Nothing to triage. {sourceRef} is currently empty."; still run Phase 3a, and Phases 4–5 for any prune-only group; otherwise exit cleanly.
+- **All items classified `needs-you`** → run Phase 3 and Phase 3a; skip Phases 4–5 unless Phase 3a found removable pins (prune-only group); print summary.
+- **Pin experiment fails** (`{installCommand}` errors, lockfile can't be read for the package, pin key unparseable) → keep the pin, blocker `install failed` / `unparseable`, report in `👀 SKIM`; never remove a pin you could not verify.
 - **All trivial bumps fail tests in a group** → stop that group; print which bumps failed; continue with other groups; do not commit the failing group. Report the stopped group in the Phase 6 `👀 SKIM` block (a safe default, not a decision needed).
 - **CI fails on a PR** → leave the PR open; print what failed; continue to next group; do not merge the failing PR.
 - **`mergeStateStatus == BLOCKED`** → leave the PR open; surface to user; do not attempt to bypass branch protection. The PR is then owned by step 2 / step 3a on every subsequent run — its issues stay excluded from Phase 4 so the bumps are never re-derived behind its back.
@@ -497,6 +568,8 @@ The skill is safe to re-run any time. Phase 1 step 2 detects prior-run PRs (by b
 - Does not touch the source itself (the epic issue or the Project board configuration).
 - Does not touch issues outside the open work set (the epic's direct sub-issues, or the project's open issue items).
 - Does not auto-fix issues that live in a repo other than the cwd repo (project source) — those are surfaced as `needs-you`.
-- Does not bump majors. Does not change application code beyond what a dep bump's transitive resolution requires.
+- Does not bump majors — directly or through a pin. A pin never moves a transitive dep across a major.
+- Does not add pins unless the ecosystem sets `allowResolutionPins`, and does not keep them past need when it sets `pruneResolutions`. Pin work never edits a manifest beyond `{pinField}` and a recorded patch/minor parent bump.
+- Does not change application code beyond what a dep bump's transitive resolution requires.
 - Does not bypass the pre-commit gate. Ever.
 - Does not bypass branch protection. Ever.
